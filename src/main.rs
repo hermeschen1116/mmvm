@@ -1,3 +1,5 @@
+extern crate core;
+
 mod cli;
 mod mmvm;
 mod utils;

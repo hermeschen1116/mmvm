@@ -175,3 +175,7 @@ tags
 [._]*.un~
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,linux,jetbrains+all,vim,rust
+
+result
+file.py
+testcases.txt
