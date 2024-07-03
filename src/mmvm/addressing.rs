@@ -1,8 +1,8 @@
-use std::fmt::{Display, Formatter};
-
+use crate::mmvm::numerical::Displacement;
 use crate::mmvm::register::BaseRegister::{BP, BX};
 use crate::mmvm::register::IndexRegister::{DI, SI};
 use crate::mmvm::register::{BaseRegister, IndexRegister, Register};
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Copy, Clone)]
 pub enum Addressing {
@@ -12,15 +12,19 @@ pub enum Addressing {
 
     DirectIndexAddressing(u16, u16),
 
-    BasedAddressing(BaseRegister, bool, u16),
+    BasedAddressing(BaseRegister, bool, Displacement),
 
-    IndexedAddressing(IndexRegister, bool, u16),
+    IndexedAddressing(IndexRegister, bool, Displacement),
 
-    BasedIndexedAddressing(BaseRegister, IndexRegister, bool, u16),
+    BasedIndexedAddressing(BaseRegister, IndexRegister, bool, Displacement),
 }
 
 impl Addressing {
-    fn decode_displacement(r#mod: u8, r_m: u8, binary_data: &[u8]) -> (usize, bool, Option<u16>) {
+    fn decode_displacement(
+        r#mod: u8,
+        r_m: u8,
+        binary_data: &[u8],
+    ) -> (usize, bool, Option<Displacement>) {
         if binary_data.is_empty() {
             return (0, true, None);
         }
@@ -32,9 +36,9 @@ impl Addressing {
                     (
                         2,
                         true,
-                        Some(u16::from(
+                        Some(Displacement::Word(u16::from(
                             ((binary_data[1] as u16) << 8) + (binary_data[0] as u16),
-                        )),
+                        ))),
                     )
                 }
             }
@@ -43,10 +47,10 @@ impl Addressing {
                     (
                         1,
                         false,
-                        Some(u16::from(((binary_data[0] as i8) * -1i8) as u16)),
+                        Some(Displacement::Byte(((binary_data[0] as i8) * -1i8) as u8)),
                     )
                 } else {
-                    (1, true, Some(u16::from(binary_data[0] as u16)))
+                    (1, true, Some(Displacement::Byte(binary_data[0])))
                 }
             }
             0b10 => {
@@ -55,7 +59,11 @@ impl Addressing {
                 if (binary_data[1] & 0b10000000) != 0b0 {
                     displacement = ((displacement as i16) * -1i16) as u16;
                 }
-                (2, (binary_data[1] & 0b10000000) == 0b0, Some(displacement))
+                (
+                    2,
+                    (binary_data[1] & 0b10000000) == 0b0,
+                    Some(Displacement::Word(displacement)),
+                )
             }
             _ => (0, true, None),
         }
@@ -72,7 +80,9 @@ impl Addressing {
             if let (mut l, sign, Some(displacement)) =
                 Self::decode_displacement(r#mod, r_m, binary_data)
             {
-                if displacement == 0b0 {
+                if (displacement == Displacement::Byte(0b0))
+                    | (displacement == Displacement::Word(0x0))
+                {
                     l = 0;
                 }
                 let addressing = match r_m {
@@ -104,7 +114,11 @@ impl Addressing {
                     0b101 => Some(Addressing::IndexedAddressing(DI, sign, displacement)),
                     0b110 => {
                         if r#mod == 0b00 {
-                            Some(Addressing::DirectAddressing(displacement))
+                            let address = match displacement {
+                                Displacement::Word(displacement) => displacement,
+                                _ => return (0, None),
+                            };
+                            Some(Addressing::DirectAddressing(address))
                         } else {
                             Some(Addressing::BasedAddressing(BP, sign, displacement))
                         }
@@ -210,10 +224,12 @@ impl Display for Addressing {
                 write!(f, "{:x}:{:x}", offset, segment)
             }
             &Addressing::BasedAddressing(register, sign, displacement) => {
-                if displacement != 0b0 {
+                if (displacement != Displacement::Byte(0b0))
+                    & (displacement != Displacement::Word(0x0))
+                {
                     write!(
                         f,
-                        "[{}{}{:x}]",
+                        "[{}{}{}]",
                         register,
                         displacement_sign(sign),
                         displacement
@@ -223,10 +239,12 @@ impl Display for Addressing {
                 }
             }
             &Addressing::IndexedAddressing(register, sign, displacement) => {
-                if displacement != 0b0 {
+                if (displacement != Displacement::Byte(0b0))
+                    & (displacement != Displacement::Word(0x0))
+                {
                     write!(
                         f,
-                        "[{}{}{:x}]",
+                        "[{}{}{}]",
                         register,
                         displacement_sign(sign),
                         displacement
@@ -236,10 +254,12 @@ impl Display for Addressing {
                 }
             }
             &Addressing::BasedIndexedAddressing(base, index, sign, displacement) => {
-                if displacement != 0 {
+                if (displacement != Displacement::Byte(0b0))
+                    & (displacement != Displacement::Word(0x0))
+                {
                     write!(
                         f,
-                        "[{}+{}{}{:x}]",
+                        "[{}+{}{}{}]",
                         base,
                         index,
                         displacement_sign(sign),
@@ -255,16 +275,16 @@ impl Display for Addressing {
 
 #[cfg(test)]
 mod tests {
-    use crate::mmvm::addressing::Addressing;
+    use crate::mmvm::{addressing::Addressing, numerical::Displacement};
 
     #[test]
     fn test_decode_displacement() {
         let testcases = [
-            (0b00, 0b000, &[0x87, 0x54], 0, 0x0),
-            (0b00, 0b110, &[0x87, 0x54], 2, 0x5487),
-            (0b01, 0b000, &[0x87, 0x00], 1, 0x79),
-            (0b10, 0b000, &[0x87, 0x54], 2, 0x5487),
-            (0b11, 0b000, &[0x87, 0x54], 0, 0x0),
+            (0b00, 0b000, &[0x87, 0x54], 0, Displacement::Byte(0x0)),
+            (0b00, 0b110, &[0x87, 0x54], 2, Displacement::Word(0x5487)),
+            (0b01, 0b000, &[0x87, 0x00], 1, Displacement::Byte(0x79)),
+            (0b10, 0b000, &[0x87, 0x54], 2, Displacement::Word(0x5487)),
+            (0b11, 0b000, &[0x87, 0x54], 0, Displacement::Byte(0x0)),
         ];
 
         for (i, testcase) in testcases.into_iter().enumerate() {
@@ -273,7 +293,7 @@ mod tests {
             {
                 assert_eq!(
                     displacement, testcase.4,
-                    "#{}, result: {:x}, expected: {:x}",
+                    "#{}, result: {}, expected: {}",
                     i, displacement, testcase.4
                 );
                 assert_eq!(

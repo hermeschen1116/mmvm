@@ -3,8 +3,11 @@ use std::fmt::{Display, Formatter};
 use crate::mmvm::addressing::Addressing;
 use crate::mmvm::mnemonic::Mnemonic;
 use crate::mmvm::mnemonic::Mnemonic::*;
+use crate::mmvm::register::ByteRegister::CL;
 use crate::mmvm::register::Register;
 use crate::mmvm::register::WordRegister::{AX, DX};
+
+use super::numerical::Immediate;
 
 #[derive(Debug, Copy, Clone)]
 pub enum Instruction {
@@ -12,24 +15,24 @@ pub enum Instruction {
     WithInstruction(Mnemonic, Mnemonic),
     WithAddress(Mnemonic, Addressing),
     AddressToAddress(Mnemonic, bool, Addressing, Addressing),
-    WithImmediate(Mnemonic, u16),
-    ImmediateToAddress(Mnemonic, Addressing, u16),
+    WithImmediate(Mnemonic, Immediate),
+    ImmediateToAddress(Mnemonic, Addressing, Immediate),
     Undefined,
 }
 
 impl Instruction {
-    pub fn decode_data(word_mode: bool, binary_data: &[u8]) -> (usize, Option<u16>) {
+    pub fn decode_data(word_mode: bool, binary_data: &[u8]) -> (usize, Option<Immediate>) {
         if binary_data.is_empty() {
             return (0, None);
         }
         if !word_mode {
-            (1, Some(u16::from(binary_data[0])))
+            (1, Some(Immediate::Byte(binary_data[0])))
         } else {
             (
                 2,
-                Some(u16::from(
+                Some(Immediate::Word(u16::from(
                     ((binary_data[1] as u16) << 8) + (binary_data[0] as u16),
-                )),
+                ))),
             )
         }
     }
@@ -91,7 +94,9 @@ impl Instruction {
             0b10100000 | 0b10100001 | 0b10100010 | 0b10100011 => {
                 let d = (binary_data[0] & 0b00000010) >> 1;
                 let w = binary_data[0] & 0b00000001;
-                if let (_, Some(address)) = Self::decode_data(true, &binary_data[1..]) {
+                if let (_, Some(Immediate::Word(address))) =
+                    Self::decode_data(true, &binary_data[1..])
+                {
                     (
                         3,
                         Some(Instruction::AddressToAddress(
@@ -229,7 +234,7 @@ impl Instruction {
                     Addressing::RegisterAddressing(
                         Register::decode(w == 0b1, true, 0b000).unwrap(),
                     ),
-                    binary_data[1] as u16,
+                    Immediate::Byte(binary_data[1]),
                 )),
             ),
             // Variable Port
@@ -450,29 +455,38 @@ impl Instruction {
         let v = (binary_data[0] & 0b00000010) >> 1;
         let w = binary_data[0] & 0b00000001;
 
-        let instruction = match (v, binary_data[1] & 0b00111000) {
-            (0b0, 0b00100000) => SHL_S,
-            (0b1, 0b00100000) => SHL_C,
-            (0b0, 0b00101000) => SHR_S,
-            (0b1, 0b00101000) => SHR_C,
-            (0b0, 0b00111000) => SAR_S,
-            (0b1, 0b00111000) => SAR_C,
-            (0b0, 0b00000000) => ROL_S,
-            (0b1, 0b00000000) => ROL_C,
-            (0b0, 0b00001000) => ROR_S,
-            (0b1, 0b00001000) => ROR_C,
-            (0b0, 0b00010000) => RCL_S,
-            (0b1, 0b00010000) => RCL_C,
-            (0b0, 0b00011000) => RCR_S,
-            (0b1, 0b00011000) => RCR_C,
+        let instruction = match binary_data[1] & 0b00111000 {
+            0b00100000 => SHL,
+            0b00101000 => SHR,
+            0b00111000 => SAR,
+            0b00000000 => ROL,
+            0b00001000 => ROR,
+            0b00010000 => RCL,
+            0b00011000 => RCR,
             _ => return (0, None),
         };
 
         if let (l, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
-            (
-                2 + l,
-                Some(Instruction::ImmediateToAddress(instruction, r_m, 0b1)),
-            )
+            if v == 0b1 {
+                (
+                    2 + l,
+                    Some(Instruction::AddressToAddress(
+                        instruction,
+                        true,
+                        Addressing::RegisterAddressing(Register::ByteReg(CL)),
+                        r_m,
+                    )),
+                )
+            } else {
+                (
+                    2 + l,
+                    Some(Instruction::ImmediateToAddress(
+                        instruction,
+                        r_m,
+                        Immediate::Byte(0b1),
+                    )),
+                )
+            }
         } else {
             (0, None)
         }
@@ -710,8 +724,12 @@ impl Instruction {
                 } else {
                     JMP
                 };
-                if let (_, Some(offset)) = Self::decode_data(true, &binary_data[1..]) {
-                    if let (_, Some(segment)) = Self::decode_data(true, &binary_data[3..]) {
+                if let (_, Some(Immediate::Word(offset))) =
+                    Self::decode_data(true, &binary_data[1..])
+                {
+                    if let (_, Some(Immediate::Word(segment))) =
+                        Self::decode_data(true, &binary_data[3..])
+                    {
                         (
                             5,
                             Some(Instruction::WithAddress(
@@ -757,89 +775,36 @@ impl Instruction {
     }
 
     pub fn decode_conditional_jump_instruction(binary_data: &[u8]) -> (usize, Option<Instruction>) {
-        match binary_data[0] {
-            0b01110100 => (
-                2,
-                Some(Instruction::WithImmediate(JZ, binary_data[1] as u16)),
-            ),
-            0b01111100 => (
-                2,
-                Some(Instruction::WithImmediate(JL, binary_data[1] as u16)),
-            ),
-            0b01111110 => (
-                2,
-                Some(Instruction::WithImmediate(JLE, binary_data[1] as u16)),
-            ),
-            0b01110010 => (
-                2,
-                Some(Instruction::WithImmediate(JB, binary_data[1] as u16)),
-            ),
-            0b01110110 => (
-                2,
-                Some(Instruction::WithImmediate(JBE, binary_data[1] as u16)),
-            ),
-            0b01111010 => (
-                2,
-                Some(Instruction::WithImmediate(JP, binary_data[1] as u16)),
-            ),
-            0b01110000 => (
-                2,
-                Some(Instruction::WithImmediate(JO, binary_data[1] as u16)),
-            ),
-            0b01111000 => (
-                2,
-                Some(Instruction::WithImmediate(JS, binary_data[1] as u16)),
-            ),
-            0b01110101 => (
-                2,
-                Some(Instruction::WithImmediate(JNZ, binary_data[1] as u16)),
-            ),
-            0b01111101 => (
-                2,
-                Some(Instruction::WithImmediate(JNL, binary_data[1] as u16)),
-            ),
-            0b01111111 => (
-                2,
-                Some(Instruction::WithImmediate(JNLE, binary_data[1] as u16)),
-            ),
-            0b01110011 => (
-                2,
-                Some(Instruction::WithImmediate(JNB, binary_data[1] as u16)),
-            ),
-            0b01110111 => (
-                2,
-                Some(Instruction::WithImmediate(JNBE, binary_data[1] as u16)),
-            ),
-            0b01111011 => (
-                2,
-                Some(Instruction::WithImmediate(JNP, binary_data[1] as u16)),
-            ),
-            0b01110001 => (
-                2,
-                Some(Instruction::WithImmediate(JNO, binary_data[1] as u16)),
-            ),
-            0b01111001 => (
-                2,
-                Some(Instruction::WithImmediate(JNS, binary_data[1] as u16)),
-            ),
-            0b11100010 => (
-                2,
-                Some(Instruction::WithImmediate(LOOP, binary_data[1] as u16)),
-            ),
-            0b11100001 => (
-                2,
-                Some(Instruction::WithImmediate(LOOPZ, binary_data[1] as u16)),
-            ),
-            0b11100000 => (
-                2,
-                Some(Instruction::WithImmediate(LOOPNZ, binary_data[1] as u16)),
-            ),
-            0b11100011 => (
-                2,
-                Some(Instruction::WithImmediate(JCXZ, binary_data[1] as u16)),
-            ),
-            _ => (0, None),
-        }
+        let instruction = match binary_data[0] {
+            0b01110100 => JZ,
+            0b01111100 => JL,
+            0b01111110 => JLE,
+            0b01110010 => JB,
+            0b01110110 => JBE,
+            0b01111010 => JP,
+            0b01110000 => JO,
+            0b01111000 => JS,
+            0b01110101 => JNZ,
+            0b01111101 => JNL,
+            0b01111111 => JNLE,
+            0b01110011 => JNB,
+            0b01110111 => JNBE,
+            0b01111011 => JNP,
+            0b01110001 => JNO,
+            0b01111001 => JNS,
+            0b11100010 => LOOP,
+            0b11100001 => LOOPZ,
+            0b11100000 => LOOPNZ,
+            0b11100011 => JCXZ,
+            _ => return (0, None),
+        };
+        (
+            2,
+            Some(Instruction::WithImmediate(
+                instruction,
+                Immediate::Byte(binary_data[1]),
+            )),
+        )
     }
 
     pub fn decode_interrupt_instruction(binary_data: &[u8]) -> (usize, Option<Instruction>) {
@@ -847,7 +812,10 @@ impl Instruction {
             // Type Specified
             0b11001101 => (
                 2,
-                Some(Instruction::WithImmediate(INT, binary_data[1] as u16)),
+                Some(Instruction::WithImmediate(
+                    INT,
+                    Immediate::Byte(binary_data[1]),
+                )),
             ),
             // Type 3
             0b11001100 => (1, Some(Instruction::Standalone(INT))),
@@ -1029,7 +997,7 @@ impl Instruction {
             // ESC
             0b11011000 | 0b11011111 => Self::decode_escape_instruction(binary_data),
             _ => (0, Some(Instruction::Undefined)),
-        })
+        }
     }
 }
 
@@ -1046,14 +1014,11 @@ impl Display for Instruction {
                 false => write!(f, "{}\t{}, {}", mnemonic, reg, r_m),
             },
             &Instruction::WithImmediate(mnemonic, immediate) => {
-                write!(f, "{}\t{:04x}", mnemonic, immediate)
+                write!(f, "{}\t{}", mnemonic, immediate)
             }
-            &Instruction::ImmediateToAddress(mnemonic, target, immediate) => match mnemonic {
-                IN | OUT | ADD | ADC | SUB | SSB | CMP => {
-                    write!(f, "{}\t{}, {:x}", mnemonic, target, immediate)
-                }
-                _ => write!(f, "{}\t{}, {:04x}", mnemonic, target, immediate),
-            },
+            &Instruction::ImmediateToAddress(mnemonic, target, immediate) => {
+                write!(f, "{}\t{}, {}", mnemonic, target, immediate)
+            }
             &Instruction::Undefined => write!(f, "(undefined)"),
         }
     }
@@ -1852,7 +1817,11 @@ mod tests {
             // (&[0x80, 0x7e, 0x0a, 0x6f, 0x00, 0x00], 4, "cmp byte\t[bp+a], 6f"),
             // (&[0x80, 0x7e, 0x0a, 0x70, 0x00, 0x00], 4, "cmp byte\t[bp+a], 70"),
             // (&[0x80, 0x7e, 0x0a, 0x78, 0x00, 0x00], 4, "cmp byte\t[bp+a], 78"),
-            // (&[0x80, 0x3f, 0x00, 0x00, 0x00, 0x00], 3, "cmp byte\t[bx], 0"),
+            (
+                &[0x80, 0x3f, 0x00, 0x00, 0x00, 0x00],
+                3,
+                "cmp byte\t[bx], 0",
+            ),
             // (&[0x80, 0x3f, 0x20, 0x00, 0x00, 0x00], 3, "cmp byte\t[bx], 20"),
             // (&[0x80, 0x3f, 0x2b, 0x00, 0x00, 0x00], 3, "cmp byte\t[bx], 2b"),
             // (&[0x80, 0x3f, 0x2d, 0x00, 0x00, 0x00], 3, "cmp byte\t[bx], 2d"),

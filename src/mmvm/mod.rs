@@ -3,6 +3,7 @@ use crate::mmvm::instruction::Instruction;
 mod addressing;
 mod instruction;
 mod mnemonic;
+mod numerical;
 mod register;
 
 pub struct Disassembler;
