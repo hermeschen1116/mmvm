@@ -12,11 +12,11 @@ pub enum Addressing {
 
     DirectIndexAddressing(u16, u16),
 
-    BasedAddressing(BaseRegister, bool, Displacement),
+    BasedAddressing(BaseRegister, Displacement),
 
-    IndexedAddressing(IndexRegister, bool, Displacement),
+    IndexedAddressing(IndexRegister, Displacement),
 
-    BasedIndexedAddressing(BaseRegister, IndexRegister, bool, Displacement),
+    BasedIndexedAddressing(BaseRegister, IndexRegister, Displacement),
 }
 
 impl Addressing {
@@ -24,52 +24,32 @@ impl Addressing {
         r#mod: u8,
         r_m: u8,
         binary_data: &[u8],
-    ) -> (usize, bool, Option<Displacement>) {
+    ) -> (usize, Option<Displacement>) {
         if binary_data.is_empty() {
-            return (0, true, None);
+            return (0, None);
         }
-        match r#mod {
+        let (mut length, displacement) = match r#mod {
             0b00 => {
                 if r_m != 0b110 {
-                    (0, true, None)
+                    return (0, None);
                 } else {
-                    (
-                        2,
-                        true,
-                        Some(Displacement::Word(u16::from(
-                            ((binary_data[1] as u16) << 8) + (binary_data[0] as u16),
-                        ))),
-                    )
+                    (2, Displacement::decode(&binary_data[..=1], false))
                 }
             }
-            0b01 => {
-                if (binary_data[0] & 0b10000000) == 0b10000000 {
-                    (
-                        1,
-                        false,
-                        Some(Displacement::Byte(((binary_data[0] as i8) * -1i8) as u8)),
-                    )
-                } else {
-                    (1, true, Some(Displacement::Byte(binary_data[0])))
-                }
-            }
-            0b10 => {
-                let mut displacement =
-                    u16::from(((binary_data[1] as u16) << 8) + (binary_data[0] as u16));
-                if (binary_data[1] & 0b10000000) != 0b0 {
-                    displacement = ((displacement as i16) * -1i16) as u16;
-                }
-                (
-                    2,
-                    (binary_data[1] & 0b10000000) == 0b0,
-                    Some(Displacement::Word(displacement)),
-                )
-            }
-            _ => (0, true, None),
+            0b01 => (1, Displacement::decode(&binary_data[0..1], true)),
+            0b10 => (2, Displacement::decode(&binary_data[..=1], true)),
+            _ => return (0, None),
+        };
+        if (length != 0) & displacement.is_zero() {
+            length = 0
         }
+        (length, Some(displacement))
     }
 
     pub fn decode_rm(w: u8, r#mod: u8, r_m: u8, binary_data: &[u8]) -> (usize, Option<Addressing>) {
+        if binary_data.is_empty() {
+            return (0, None);
+        }
         if r#mod == 0b11 {
             if let Some(register) = Register::decode(w == 0b1, true, r_m) {
                 (0, Some(Addressing::RegisterAddressing(register)))
@@ -77,56 +57,40 @@ impl Addressing {
                 (0, None)
             }
         } else {
-            if let (mut l, sign, Some(displacement)) =
-                Self::decode_displacement(r#mod, r_m, binary_data)
-            {
-                if (displacement == Displacement::Byte(0b0))
-                    | (displacement == Displacement::Word(0x0))
-                {
-                    l = 0;
-                }
-                let addressing = match r_m {
-                    0b000 => Some(Addressing::BasedIndexedAddressing(
-                        BX,
-                        SI,
-                        sign,
-                        displacement,
-                    )),
-                    0b001 => Some(Addressing::BasedIndexedAddressing(
-                        BX,
-                        DI,
-                        sign,
-                        displacement,
-                    )),
-                    0b010 => Some(Addressing::BasedIndexedAddressing(
-                        BP,
-                        SI,
-                        sign,
-                        displacement,
-                    )),
-                    0b011 => Some(Addressing::BasedIndexedAddressing(
-                        BP,
-                        DI,
-                        sign,
-                        displacement,
-                    )),
-                    0b100 => Some(Addressing::IndexedAddressing(SI, sign, displacement)),
-                    0b101 => Some(Addressing::IndexedAddressing(DI, sign, displacement)),
+            if let (l, Some(displacement)) = Self::decode_displacement(r#mod, r_m, binary_data) {
+                match r_m {
+                    0b000 => (
+                        l,
+                        Some(Addressing::BasedIndexedAddressing(BX, SI, displacement)),
+                    ),
+                    0b001 => (
+                        l,
+                        Some(Addressing::BasedIndexedAddressing(BX, DI, displacement)),
+                    ),
+                    0b010 => (
+                        l,
+                        Some(Addressing::BasedIndexedAddressing(BP, SI, displacement)),
+                    ),
+                    0b011 => (
+                        l,
+                        Some(Addressing::BasedIndexedAddressing(BP, DI, displacement)),
+                    ),
+                    0b100 => (l, Some(Addressing::IndexedAddressing(SI, displacement))),
+                    0b101 => (l, Some(Addressing::IndexedAddressing(DI, displacement))),
                     0b110 => {
                         if r#mod == 0b00 {
                             let address = match displacement {
-                                Displacement::Word(displacement) => displacement,
+                                Displacement::Word(_, _, disp) => disp,
                                 _ => return (0, None),
                             };
-                            Some(Addressing::DirectAddressing(address))
+                            (l, Some(Addressing::DirectAddressing(address)))
                         } else {
-                            Some(Addressing::BasedAddressing(BP, sign, displacement))
+                            (l, Some(Addressing::BasedAddressing(BP, displacement)))
                         }
                     }
-                    0b111 => Some(Addressing::BasedAddressing(BX, sign, displacement)),
-                    _ => None,
-                };
-                (l, addressing)
+                    0b111 => (l, Some(Addressing::BasedAddressing(BX, displacement))),
+                    _ => (0, None),
+                }
             } else {
                 (0, None)
             }
@@ -208,13 +172,6 @@ impl Addressing {
     }
 }
 
-fn displacement_sign(sign: bool) -> &'static str {
-    match sign {
-        false => "-",
-        true => "+",
-    }
-}
-
 impl Display for Addressing {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -223,48 +180,23 @@ impl Display for Addressing {
             &Addressing::DirectIndexAddressing(offset, segment) => {
                 write!(f, "{:x}:{:x}", offset, segment)
             }
-            &Addressing::BasedAddressing(register, sign, displacement) => {
-                if (displacement != Displacement::Byte(0b0))
-                    & (displacement != Displacement::Word(0x0))
-                {
-                    write!(
-                        f,
-                        "[{}{}{}]",
-                        register,
-                        displacement_sign(sign),
-                        displacement
-                    )
+            &Addressing::BasedAddressing(register, displacement) => {
+                if !displacement.is_zero() {
+                    write!(f, "[{}{}]", register, displacement)
                 } else {
                     write!(f, "[{}]", register)
                 }
             }
-            &Addressing::IndexedAddressing(register, sign, displacement) => {
-                if (displacement != Displacement::Byte(0b0))
-                    & (displacement != Displacement::Word(0x0))
-                {
-                    write!(
-                        f,
-                        "[{}{}{}]",
-                        register,
-                        displacement_sign(sign),
-                        displacement
-                    )
+            &Addressing::IndexedAddressing(register, displacement) => {
+                if !displacement.is_zero() {
+                    write!(f, "[{}{}]", register, displacement)
                 } else {
                     write!(f, "[{}]", register)
                 }
             }
-            &Addressing::BasedIndexedAddressing(base, index, sign, displacement) => {
-                if (displacement != Displacement::Byte(0b0))
-                    & (displacement != Displacement::Word(0x0))
-                {
-                    write!(
-                        f,
-                        "[{}+{}{}{}]",
-                        base,
-                        index,
-                        displacement_sign(sign),
-                        displacement
-                    )
+            &Addressing::BasedIndexedAddressing(base, index, displacement) => {
+                if !displacement.is_zero() {
+                    write!(f, "[{}+{}{}]", base, index, displacement)
                 } else {
                     write!(f, "[{}+{}]", base, index)
                 }
@@ -280,15 +212,31 @@ mod tests {
     #[test]
     fn test_decode_displacement() {
         let testcases = [
-            (0b00, 0b000, &[0x87, 0x54], 0, Displacement::Byte(0x0)),
-            (0b00, 0b110, &[0x87, 0x54], 2, Displacement::Word(0x5487)),
-            (0b01, 0b000, &[0x87, 0x00], 1, Displacement::Byte(0x79)),
-            (0b10, 0b000, &[0x87, 0x54], 2, Displacement::Word(0x5487)),
-            (0b11, 0b000, &[0x87, 0x54], 0, Displacement::Byte(0x0)),
+            (
+                0b00,
+                0b110,
+                &[0x87, 0x54],
+                2,
+                Displacement::Word(false, true, 0x5487),
+            ),
+            (
+                0b01,
+                0b000,
+                &[0x87, 0x00],
+                1,
+                Displacement::Byte(true, false, 0x79),
+            ),
+            (
+                0b10,
+                0b000,
+                &[0x87, 0x54],
+                2,
+                Displacement::Word(true, true, 0x5487),
+            ),
         ];
 
         for (i, testcase) in testcases.into_iter().enumerate() {
-            if let (l, _, Some(displacement)) =
+            if let (l, Some(displacement)) =
                 Addressing::decode_displacement(testcase.0, testcase.1, testcase.2)
             {
                 assert_eq!(
@@ -361,7 +309,7 @@ mod tests {
 
     // #[test]
     // fn test_decode() {
-    //     let testcases = [(0b0, &[0x89, 0x54], 0b11111111, "al")];
+    //     let testcases = [(0b0, &[0x87, 0x54], 0b11111111, "al")];
 
     //     for (i, testcase) in testcases.into_iter().enumerate() {
     //         match Addressing::decode(testcase.0, testcase.1, testcase.2) {

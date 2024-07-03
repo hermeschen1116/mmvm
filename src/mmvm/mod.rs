@@ -22,12 +22,12 @@ impl Disassembler {
     pub fn disassemble(&self, binary_code: &[u8]) -> Vec<Instruction> {
         let mut instructions: Vec<Instruction> = Vec::new();
 
-        let mut pc: usize = 32;
+        let mut pc: u16 = 0x0;
 
-        while pc < binary_code.len() {
-            let chunk = &binary_code[pc..];
-            if let (length, Some(instruction)) = Instruction::decode(chunk) {
-                pc += length;
+        while (pc as usize) < binary_code.len() {
+            let chunk = &binary_code[(pc as usize)..];
+            if let (length, Some(instruction)) = Instruction::decode(pc, chunk) {
+                pc += length as u16;
                 instructions.push(instruction);
             } else {
                 break;
