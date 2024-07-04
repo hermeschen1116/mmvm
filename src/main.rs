@@ -14,6 +14,13 @@ fn main() {
     let cli = Args::parse();
 
     let bytes_data: Vec<u8> = read_file(&cli.d).expect("Failed to read the input file");
-    dbg!(&bytes_data);
     let instructions = Disassembler::disassemble(&bytes_data);
+    for (pc, binary, instruction) in instructions.into_iter() {
+        let binary = binary
+            .iter()
+            .map(|&b| format!("{:02x}", b))
+            .collect::<Vec<String>>()
+            .join("");
+        println!("{:04x}: {}\t\t{}", pc, binary, instruction);
+    }
 }

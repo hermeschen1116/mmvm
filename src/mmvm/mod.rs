@@ -19,30 +19,26 @@ impl Disassembler {
         Disassembler
     }
 
-    pub fn disassemble(binary_code: &[u8]) -> Vec<Instruction> {
-        let mut instructions: Vec<Instruction> = Vec::new();
+    pub fn disassemble(binary_code: &[u8]) -> Vec<(u16, &[u8], Instruction)> {
+        let mut instructions: Vec<(u16, &[u8], Instruction)> = Vec::new();
 
         let a_hdrlen = binary_code[4];
-        println!("{}", a_hdrlen as usize);
         let a_text: u32 = binary_code[8..12]
             .iter()
             .enumerate()
             .map(|(i, &byte)| (byte as u32) << (8 * i))
             .sum();
         let mut pc: usize = 0;
-        println!("{}", a_text as usize);
         while pc < (a_text as usize) {
             let chunk = &binary_code[((a_hdrlen as usize) + pc)..];
             if let (length, Some(instruction)) = Instruction::decode(pc as u16, chunk) {
+                instructions.push(((pc as u16), &chunk[..length], instruction));
                 pc += length;
-                println!("{}, {}", length, instruction);
-                instructions.push(instruction);
             } else {
                 print!("error: {:?}", chunk);
                 break;
             }
         }
-        print!("{}", pc);
 
         instructions
     }
