@@ -32,8 +32,14 @@ impl Disassembler {
         while pc < (a_text as usize) {
             let chunk = &binary_code[((a_hdrlen as usize) + pc)..];
             if let (length, Some(instruction)) = Instruction::decode(pc as u16, chunk) {
-                instructions.push(((pc as u16), &chunk[..length], instruction));
-                pc += length;
+                if pc + length <= (a_text as usize) {
+                    instructions.push(((pc as u16), &chunk[..length], instruction));
+                    pc += length;
+                } else {
+                    dbg!(a_text, pc + length);
+                    instructions.push(((pc as u16), &[0b00], Instruction::Undefined));
+                    break;
+                }
             } else {
                 print!("error: {:?}", chunk);
                 break;

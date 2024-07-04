@@ -837,6 +837,9 @@ impl Instruction {
     }
 
     pub fn decode(pc: u16, binary_data: &[u8]) -> (usize, Option<Instruction>) {
+    	if binary_data.is_empty() {
+     		panic!("data length not enough");
+     	}
         match binary_data[0] {
             0b11010111 => (1, Some(Instruction::Standalone(XLAT))),
             0b10011111 => (1, Some(Instruction::Standalone(LAHF))),
@@ -5735,5 +5738,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_decode_undefined() {
+    	let testcases = [
+     		(0x013f, &[0x00], 1, "(undefined)"),
+     	];
+    	for (i, testcase) in testcases.into_iter().enumerate() {
+         	if let (l, Some(instruction)) = Instruction::decode(testcase.0, testcase.1) {
+             	assert_eq!(
+	                 format!("{}", instruction),
+	                 testcase.3,
+	                 "#{}, {:04x}, {:?}, result: {:?}, expected: {}",
+	                 i,
+	                 testcase.0,
+	                 testcase.1,
+	                 instruction,
+	                 testcase.3
+	             );
+	             // assert_eq!(
+	             //     l, testcase.2,
+	             //     "#{}, {}, result: {:?}, expected: {}",
+	             //     i, instruction, l, testcase.2
+	             // );
+	         }
+	     }
     }
 }
