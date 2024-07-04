@@ -1,12 +1,12 @@
 use std::fmt::{Display, Formatter};
 
-use crate::mmvm::addressing::Addressing;
-use crate::mmvm::mnemonic::Mnemonic;
-use crate::mmvm::mnemonic::Mnemonic::*;
-use crate::mmvm::register::ByteRegister::CL;
-use crate::mmvm::register::Register;
-use crate::mmvm::register::WordRegister::{AX, DX};
-use crate::mmvm::numerical::Immediate;
+use crate::disassembler::addressing::Addressing;
+use crate::disassembler::mnemonic::Mnemonic;
+use crate::disassembler::mnemonic::Mnemonic::*;
+use crate::disassembler::register::ByteRegister::CL;
+use crate::disassembler::register::Register;
+use crate::disassembler::register::WordRegister::{AX, DX};
+use crate::disassembler::numerical::Immediate;
 
 fn match_reg(binary_data: u8, reference: &[u8]) -> bool {
 	let reg = (binary_data & 0b00111000) >> 3;
@@ -1032,7 +1032,7 @@ impl Display for Instruction {
 
 #[cfg(test)]
 mod tests {
-    use crate::mmvm::instruction::Instruction;
+    use crate::disassembler::instruction::Instruction;
 
     #[test]
     fn test_decode_move_instruction() {
@@ -5746,7 +5746,7 @@ mod tests {
      		(0x013f, &[0x00], 1, "(undefined)"),
      	];
     	for (i, testcase) in testcases.into_iter().enumerate() {
-         	if let (l, Some(instruction)) = Instruction::decode(testcase.0, testcase.1) {
+         	if let (_, Some(instruction)) = Instruction::decode(testcase.0, testcase.1) {
              	assert_eq!(
 	                 format!("{}", instruction),
 	                 testcase.3,

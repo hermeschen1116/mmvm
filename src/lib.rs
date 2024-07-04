@@ -1,3 +1,3 @@
 pub mod cli;
-pub mod mmvm;
+pub mod disassembler;
 pub mod utils;

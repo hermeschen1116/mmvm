@@ -1,7 +1,7 @@
-use crate::mmvm::numerical::Displacement;
-use crate::mmvm::register::BaseRegister::{BP, BX};
-use crate::mmvm::register::IndexRegister::{DI, SI};
-use crate::mmvm::register::{BaseRegister, IndexRegister, Register};
+use crate::disassembler::numerical::Displacement;
+use crate::disassembler::register::BaseRegister::{BP, BX};
+use crate::disassembler::register::IndexRegister::{DI, SI};
+use crate::disassembler::register::{BaseRegister, IndexRegister, Register};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Copy, Clone)]
@@ -207,7 +207,7 @@ impl Display for Addressing {
 
 #[cfg(test)]
 mod tests {
-    use crate::mmvm::{addressing::Addressing, numerical::Displacement};
+    use crate::disassembler::{addressing::Addressing, numerical::Displacement};
 
     #[test]
     fn test_decode_displacement() {

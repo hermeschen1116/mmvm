@@ -1,4 +1,4 @@
-use crate::mmvm::instruction::Instruction;
+use crate::disassembler::instruction::Instruction;
 
 mod addressing;
 mod instruction;
@@ -36,7 +36,6 @@ impl Disassembler {
                     instructions.push(((pc as u16), &chunk[..length], instruction));
                     pc += length;
                 } else {
-                    dbg!(a_text, pc + length);
                     instructions.push(((pc as u16), &[0b00], Instruction::Undefined));
                     break;
                 }

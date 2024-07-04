@@ -1,10 +1,10 @@
 extern crate core;
 
 mod cli;
-mod mmvm;
+mod disassembler;
 mod utils;
 
-use crate::mmvm::Disassembler;
+use crate::disassembler::Disassembler;
 use clap::Parser;
 
 use crate::cli::args::Args;
