@@ -4,6 +4,7 @@ mod cli;
 mod mmvm;
 mod utils;
 
+use crate::mmvm::Disassembler;
 use clap::Parser;
 
 use crate::cli::args::Args;
@@ -13,5 +14,6 @@ fn main() {
     let cli = Args::parse();
 
     let bytes_data: Vec<u8> = read_file(&cli.d).expect("Failed to read the input file");
-    dbg!(bytes_data);
+    dbg!(&bytes_data);
+    let instructions = Disassembler::disassemble(&bytes_data);
 }

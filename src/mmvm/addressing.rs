@@ -31,7 +31,7 @@ impl Addressing {
         let (mut length, displacement) = match r#mod {
             0b00 => {
                 if r_m != 0b110 {
-                    return (0, None);
+                    return (0, Some(Displacement::Word(false, false, 0x0)));
                 } else {
                     (2, Displacement::decode(&binary_data[..=1], false))
                 }
@@ -249,6 +249,8 @@ mod tests {
                     "#{}, result: {}, expected: {}",
                     i, l, testcase.3
                 );
+            } else {
+                panic!("#{}, result: None, expected: {}", i, testcase.4);
             }
         }
     }
@@ -284,6 +286,7 @@ mod tests {
             (0b0, 0b01, 0b101, &[0x87, 0x54], 1, "[di-79]"),
             (0b0, 0b01, 0b110, &[0x87, 0x54], 1, "[bp-79]"),
             (0b0, 0b01, 0b111, &[0x87, 0x54], 1, "[bx-79]"),
+            (0b0, 0b00, 0b111, &[0x87, 0x54], 0, "[bx]"),
         ];
 
         for (i, testcase) in testcases.into_iter().enumerate() {
@@ -303,6 +306,8 @@ mod tests {
                     "#{}, {:?}, result: {:?}, expected: {}",
                     i, address, l, testcase.4
                 );
+            } else {
+                panic!("#{}, result: None, expected: {}", i, testcase.5);
             }
         }
     }

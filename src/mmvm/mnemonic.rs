@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, Copy, Clone)]
 pub enum Mnemonic {
     MOV,
+    MOVBYTE,
     PUSH,
     POP,
     XCHG,
@@ -107,6 +108,7 @@ impl Display for Mnemonic {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mnemonic = match self {
             &Mnemonic::MOV => "mov",
+            &Mnemonic::MOVBYTE => "mov byte",
             &Mnemonic::PUSH => "push",
             &Mnemonic::POP => "pop",
             &Mnemonic::XCHG => "xchg",
