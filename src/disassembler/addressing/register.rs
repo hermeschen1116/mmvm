@@ -210,7 +210,7 @@ impl Display for IndexRegister {
 
 #[cfg(test)]
 mod tests {
-    use crate::disassembler::register::Register;
+    use crate::disassembler::addressing::register::Register;
 
     #[test]
     fn test_decode_general_word_register() {

@@ -2,10 +2,9 @@ use crate::{disassembler::instruction::Instruction, utils::header::Header};
 use std::cmp;
 
 mod addressing;
+mod data;
 mod instruction;
 mod mnemonic;
-mod numerical;
-mod register;
 mod test;
 
 pub struct Disassembler {
@@ -20,24 +19,35 @@ impl Disassembler {
     pub fn disassemble(&mut self, header: Header, bytes_data: &[u8]) {
         let (a_hdrlen, a_text) = (header.a_hdrlen as usize, header.a_text as usize);
         let decode_area = &bytes_data[a_hdrlen..];
-        let mut pc: usize = 0;
+        let mut instruction_pointer: usize = 0;
         loop {
-            let chunk = &decode_area[pc..];
-            if let (length, Some(instruction)) = Instruction::decode(pc as u16, chunk) {
-                match (pc + length).cmp(&a_text) {
+            let chunk = &decode_area[instruction_pointer..];
+            if let (length, Some(instruction)) =
+                Instruction::decode(instruction_pointer as u16, chunk)
+            {
+                match (instruction_pointer + length).cmp(&a_text) {
                     cmp::Ordering::Less => {
-                        self.asm
-                            .push(((pc as u16), chunk[..length].to_vec(), instruction));
-                        pc += length;
+                        self.asm.push((
+                            (instruction_pointer as u16),
+                            chunk[..length].to_vec(),
+                            instruction,
+                        ));
+                        instruction_pointer += length;
                     }
                     cmp::Ordering::Equal => {
-                        self.asm
-                            .push(((pc as u16), chunk[..length].to_vec(), instruction));
+                        self.asm.push((
+                            (instruction_pointer as u16),
+                            chunk[..length].to_vec(),
+                            instruction,
+                        ));
                         break;
                     }
                     cmp::Ordering::Greater => {
-                        self.asm
-                            .push(((pc as u16), [0b00].to_vec(), Instruction::Undefined));
+                        self.asm.push((
+                            (instruction_pointer as u16),
+                            [0b00].to_vec(),
+                            Instruction::Undefined,
+                        ));
                         break;
                     }
                 }
