@@ -1,12 +1,13 @@
 use std::fmt::{Display, Formatter};
 
-use crate::disassembler::addressing::Addressing;
-use crate::disassembler::mnemonic::Mnemonic;
-use crate::disassembler::mnemonic::Mnemonic::*;
-use crate::disassembler::numerical::{Immediate, Numerical};
-use crate::disassembler::register::ByteRegister::CL;
-use crate::disassembler::register::Register;
-use crate::disassembler::register::WordRegister::{AX, DX};
+use super::addressing::Addressing;
+use super::direction::Direction;
+use super::mnemonic::Mnemonic;
+use super::mnemonic::Mnemonic::*;
+use super::numerical::{Immediate, Numerical};
+use super::register::ByteRegister::CL;
+use super::register::Register;
+use super::register::WordRegister::{AX, DX};
 
 fn match_reg(binary_data: u8, reference: &[u8]) -> bool {
     let reg = (binary_data & 0b00111000) >> 3;
@@ -18,7 +19,7 @@ pub enum Instruction {
     Standalone(Mnemonic),
     WithInstruction(Mnemonic, Mnemonic),
     WithAddress(Mnemonic, Addressing),
-    AddressToAddress(Mnemonic, bool, Addressing, Addressing),
+    AddressToAddress(Mnemonic, Direction, Addressing, Addressing),
     WithImmediate(Mnemonic, Numerical),
     ImmediateToAddress(Mnemonic, Addressing, Numerical),
     Undefined,
@@ -63,7 +64,12 @@ impl Instruction {
                 {
                     (
                         2 + l,
-                        Some(Instruction::AddressToAddress(MOV, d == 0b0, reg, r_m)),
+                        Some(Instruction::AddressToAddress(
+                            MOV,
+                            Direction::from(d),
+                            reg,
+                            r_m,
+                        )),
                     )
                 } else {
                     (0, Some(Instruction::Undefined))
@@ -120,7 +126,7 @@ impl Instruction {
                         3,
                         Some(Instruction::AddressToAddress(
                             MOV,
-                            d == 0b0,
+                            Direction::from(d),
                             Addressing::RegisterAddressing(
                                 Register::decode(w == 0b1, true, 0b000).unwrap(),
                             ),
@@ -139,7 +145,12 @@ impl Instruction {
                 {
                     (
                         2 + l,
-                        Some(Instruction::AddressToAddress(MOV, d == 0b0, reg, r_m)),
+                        Some(Instruction::AddressToAddress(
+                            MOV,
+                            Direction::from(d),
+                            reg,
+                            r_m,
+                        )),
                     )
                 } else {
                     (0, Some(Instruction::Undefined))
@@ -211,7 +222,12 @@ impl Instruction {
                 {
                     (
                         2 + l,
-                        Some(Instruction::AddressToAddress(XCHG, true, reg, r_m)),
+                        Some(Instruction::AddressToAddress(
+                            XCHG,
+                            Direction::FromReg,
+                            reg,
+                            r_m,
+                        )),
                     )
                 } else {
                     (0, Some(Instruction::Undefined))
@@ -224,7 +240,7 @@ impl Instruction {
                         1 + l,
                         Some(Instruction::AddressToAddress(
                             XCHG,
-                            true,
+                            Direction::FromReg,
                             Addressing::RegisterAddressing(Register::WordReg(AX)),
                             reg,
                         )),
@@ -261,7 +277,7 @@ impl Instruction {
                 1,
                 Some(Instruction::AddressToAddress(
                     instruction,
-                    true,
+                    Direction::FromReg,
                     Addressing::RegisterAddressing(Register::WordReg(DX)),
                     Addressing::RegisterAddressing(
                         Register::decode(w == 0b1, true, 0b000).unwrap(),
@@ -282,7 +298,12 @@ impl Instruction {
         if let (l, Some(reg), Some(r_m)) = Addressing::decode(0b1, &binary_data[1..], 0b11111111) {
             (
                 2 + l,
-                Some(Instruction::AddressToAddress(instruction, false, reg, r_m)),
+                Some(Instruction::AddressToAddress(
+                    instruction,
+                    Direction::ToReg,
+                    reg,
+                    r_m,
+                )),
             )
         } else {
             (0, Some(Instruction::Undefined))
@@ -306,6 +327,7 @@ impl Instruction {
                     0b111 => CMP,
                     _ => return (0, Some(Instruction::Undefined)),
                 };
+                let d = (binary_data[0] & 0b00000010) >> 1;
                 if let (l, Some(reg), Some(r_m)) =
                     Addressing::decode(w, &binary_data[1..], 0b11111111)
                 {
@@ -313,7 +335,7 @@ impl Instruction {
                         2 + l,
                         Some(Instruction::AddressToAddress(
                             instruction,
-                            (binary_data[0] & 0b00000010) == 0b00,
+                            Direction::from(d),
                             reg,
                             r_m,
                         )),
@@ -490,7 +512,7 @@ impl Instruction {
                     2 + l,
                     Some(Instruction::AddressToAddress(
                         instruction,
-                        true,
+                        Direction::FromReg,
                         Addressing::RegisterAddressing(Register::ByteReg(CL)),
                         r_m,
                     )),
@@ -521,6 +543,7 @@ impl Instruction {
                     0b00110000 => XOR,
                     _ => return (0, Some(Instruction::Undefined)),
                 };
+                let d = (binary_data[0] & 0b00000010) >> 1;
                 if let (l, Some(reg), Some(r_m)) =
                     Addressing::decode(w, &binary_data[1..], 0b11111111)
                 {
@@ -528,7 +551,7 @@ impl Instruction {
                         2 + l,
                         Some(Instruction::AddressToAddress(
                             instruction,
-                            (binary_data[0] & 0b00000010) == 0b00,
+                            Direction::from(d),
                             reg,
                             r_m,
                         )),
@@ -608,7 +631,12 @@ impl Instruction {
                 {
                     (
                         2 + l,
-                        Some(Instruction::AddressToAddress(instruction, true, reg, r_m)),
+                        Some(Instruction::AddressToAddress(
+                            instruction,
+                            Direction::FromReg,
+                            reg,
+                            r_m,
+                        )),
                     )
                 } else {
                     (0, Some(Instruction::Undefined))
@@ -1071,8 +1099,8 @@ impl Display for Instruction {
             }
             &Instruction::WithAddress(mnemonic, target) => write!(f, "{} {}", mnemonic, target),
             &Instruction::AddressToAddress(mnemonic, direction, reg, r_m) => match direction {
-                true => write!(f, "{} {}, {}", mnemonic, r_m, reg),
-                false => write!(f, "{} {}, {}", mnemonic, reg, r_m),
+                Direction::FromReg => write!(f, "{} {}, {}", mnemonic, r_m, reg),
+                Direction::ToReg => write!(f, "{} {}, {}", mnemonic, reg, r_m),
             },
             &Instruction::WithImmediate(mnemonic, immediate) => {
                 write!(f, "{} {}", mnemonic, immediate)
