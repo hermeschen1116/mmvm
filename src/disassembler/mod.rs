@@ -2,6 +2,7 @@ use crate::{disassembler::instruction::Instruction, utils::header::Header};
 use std::cmp;
 
 mod addressing;
+mod direction;
 mod instruction;
 mod mnemonic;
 mod numerical;
