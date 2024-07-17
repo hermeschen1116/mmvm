@@ -1,13 +1,13 @@
 use std::fmt::{Display, Formatter};
 
-use super::addressing::Addressing;
-use super::direction::Direction;
-use super::mnemonic::Mnemonic;
-use super::mnemonic::Mnemonic::*;
-use super::numerical::{Immediate, Numerical};
-use super::register::ByteRegister::CL;
-use super::register::Register;
-use super::register::WordRegister::{AX, DX};
+use crate::disassembler::addressing::Addressing;
+use crate::disassembler::direction::Direction;
+use crate::disassembler::mnemonic::Mnemonic;
+use crate::disassembler::mnemonic::Mnemonic::*;
+use crate::disassembler::numerical::{Immediate, Numerical};
+use crate::disassembler::register::ByteRegister::CL;
+use crate::disassembler::register::Register;
+use crate::disassembler::register::WordRegister::{AX, DX};
 
 fn match_reg(binary_data: u8, reference: &[u8]) -> bool {
     let reg = (binary_data & 0b00111000) >> 3;
@@ -81,16 +81,12 @@ impl Instruction {
                 let instruction = if w == 0b1 { MOV } else { MOVBYTE };
                 if let (rl, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111)
                 {
-                    if let (dl, Some(displacement)) =
+                    if let (dl, Some(immediate)) =
                         Self::decode_data(w == 0b1, false, &binary_data[(2 + rl)..])
                     {
                         (
                             2 + rl + dl,
-                            Some(Instruction::ImmediateToAddress(
-                                instruction,
-                                r_m,
-                                displacement,
-                            )),
+                            Some(Instruction::ImmediateToAddress(instruction, r_m, immediate)),
                         )
                     } else {
                         (0, Some(Instruction::Undefined))
@@ -103,12 +99,12 @@ impl Instruction {
             0b10110000..=0b10111111 => {
                 let w = (binary_data[0] & 0b00001000) >> 3;
                 if let (_, Some(reg), None) = Addressing::decode(w, binary_data, 0b00000111) {
-                    if let (dl, Some(displacement)) =
+                    if let (dl, Some(immediate)) =
                         Self::decode_data(w == 0b1, false, &binary_data[1..])
                     {
                         (
                             1 + dl,
-                            Some(Instruction::ImmediateToAddress(MOV, reg, displacement)),
+                            Some(Instruction::ImmediateToAddress(MOV, reg, immediate)),
                         )
                     } else {
                         (0, Some(Instruction::Undefined))
@@ -376,7 +372,7 @@ impl Instruction {
                 let s = (binary_data[0] & 0b00000010) >> 1;
                 if let (rl, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111)
                 {
-                    if let (dl, Some(displacement)) = Self::decode_data(
+                    if let (dl, Some(immediate)) = Self::decode_data(
                         (w == 0b1) & (s != 0b1),
                         (s == 0b1) & ((binary_data[2 + rl] as i8) < 0i8),
                         &binary_data[(2 + rl)..],
@@ -392,11 +388,7 @@ impl Instruction {
                         };
                         (
                             2 + rl + dl,
-                            Some(Instruction::ImmediateToAddress(
-                                instruction,
-                                r_m,
-                                displacement,
-                            )),
+                            Some(Instruction::ImmediateToAddress(instruction, r_m, immediate)),
                         )
                     } else {
                         (0, Some(Instruction::Undefined))
@@ -568,9 +560,7 @@ impl Instruction {
                     0b00110100 => XOR,
                     _ => return (0, Some(Instruction::Undefined)),
                 };
-                if let (l, Some(displacement)) =
-                    Self::decode_data(w == 0b1, true, &binary_data[1..])
-                {
+                if let (l, Some(immediate)) = Self::decode_data(w == 0b1, true, &binary_data[1..]) {
                     (
                         2 + l,
                         Some(Instruction::ImmediateToAddress(
@@ -578,7 +568,7 @@ impl Instruction {
                             Addressing::RegisterAddressing(
                                 Register::decode(w == 0b1, true, 0b000).unwrap(),
                             ),
-                            displacement,
+                            immediate,
                         )),
                     )
                 } else {
@@ -589,7 +579,7 @@ impl Instruction {
             0b10000000..=0b10000011 => {
                 if let (rl, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111)
                 {
-                    if let (dl, Some(displacement)) =
+                    if let (dl, Some(immediate)) =
                         Self::decode_data(w == 0b1, false, &binary_data[(2 + rl)..])
                     {
                         let instruction = match binary_data[1] & 0b00111000 {
@@ -600,11 +590,7 @@ impl Instruction {
                         };
                         (
                             2 + rl + dl,
-                            Some(Instruction::ImmediateToAddress(
-                                instruction,
-                                r_m,
-                                displacement,
-                            )),
+                            Some(Instruction::ImmediateToAddress(instruction, r_m, immediate)),
                         )
                     } else {
                         (0, Some(Instruction::Undefined))
@@ -646,16 +632,12 @@ impl Instruction {
             0b11110110 | 0b11110111 if (binary_data[1] & 0b00111000) == 0b0 => {
                 if let (rl, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111)
                 {
-                    if let (dl, Some(displacement)) =
+                    if let (dl, Some(immediate)) =
                         Self::decode_data(w == 0b1, false, &binary_data[(2 + rl)..])
                     {
                         (
                             2 + rl + dl,
-                            Some(Instruction::ImmediateToAddress(
-                                instruction,
-                                r_m,
-                                displacement,
-                            )),
+                            Some(Instruction::ImmediateToAddress(instruction, r_m, immediate)),
                         )
                     } else {
                         (0, Some(Instruction::Undefined))
@@ -666,8 +648,7 @@ impl Instruction {
             }
             // Immediate Data and Accumulator
             0b10101000 | 0b10101001 => {
-                if let (l, Some(displacement)) =
-                    Self::decode_data(w == 0b1, false, &binary_data[1..])
+                if let (l, Some(immediate)) = Self::decode_data(w == 0b1, false, &binary_data[1..])
                 {
                     (
                         1 + l,
@@ -676,7 +657,7 @@ impl Instruction {
                             Addressing::RegisterAddressing(
                                 Register::decode(w == 0b1, true, 0b000).unwrap(),
                             ),
-                            displacement,
+                            immediate,
                         )),
                     )
                 } else {

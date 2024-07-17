@@ -1,12 +1,12 @@
 use crate::{disassembler::instruction::Instruction, utils::header::Header};
 use std::cmp;
 
-mod addressing;
-mod direction;
-mod instruction;
-mod mnemonic;
-mod numerical;
-mod register;
+pub mod addressing;
+pub mod direction;
+pub mod instruction;
+pub mod mnemonic;
+pub mod numerical;
+pub mod register;
 mod test;
 
 pub struct Disassembler {

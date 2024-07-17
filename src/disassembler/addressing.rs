@@ -35,7 +35,7 @@ impl Addressing {
                 if r_m != 0b110 {
                     return (
                         0,
-                        Some(Numerical::Imme(Immediate::from(&[0x00, 0x00], false))),
+                        Some(Numerical::Imme(Immediate::from(&[0x00, 0x00], true))),
                     );
                 } else {
                     (
@@ -188,7 +188,7 @@ impl Display for Addressing {
             &Addressing::RegisterAddressing(register) => write!(f, "{}", register),
             &Addressing::DirectAddressing(address) => write!(f, "[{}]", address),
             &Addressing::DirectIndexAddressing(offset, segment) => {
-                write!(f, "{}:{}", offset, segment)
+                write!(f, "{}:{}", segment, offset)
             }
             &Addressing::BasedAddressing(register, displacement) => {
                 if !displacement.is_zero() {
