@@ -23,6 +23,7 @@ pub struct Hardware {
     flag: u16,
     stack: Vec<u8>,
     memory: HashMap<u16, u8>,
+    pub systemcall_count: usize,
 }
 
 impl Hardware {
@@ -44,6 +45,7 @@ impl Hardware {
             flag: 0x0000,
             stack: Vec::new(),
             memory: HashMap::new(),
+            systemcall_count: 0,
         }
     }
 
@@ -123,8 +125,7 @@ impl Hardware {
         } else {
             self.sp += 0x0002;
         }
-        let value_high = ((value & 0xff00) >> 8) as u8;
-        let value_low = (value & 0x00ff) as u8;
+        let [value_low, value_high] = value.to_le_bytes();
         self.stack.push(value_high);
         self.stack.push(value_low);
     }
@@ -147,8 +148,7 @@ impl Hardware {
     }
 
     pub fn write_word_to_memory(&mut self, addr: u16, value: u16) {
-        let value_high = ((value & 0xff00) >> 8) as u8;
-        let value_low = (value & 0x00ff) as u8;
+        let [value_low, value_high] = value.to_le_bytes();
         self.memory.insert(addr, value_low);
         self.memory.insert(addr + 0b1, value_high);
     }
@@ -203,9 +203,29 @@ impl Hardware {
 
 impl Display for Hardware {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let zf = if self.clone().read_flags("ZF") {
+            "Z"
+        } else {
+            "-"
+        };
+        let sf = if self.clone().read_flags("SF") {
+            "S"
+        } else {
+            "-"
+        };
+        let of = if self.clone().read_flags("OF") {
+            "O"
+        } else {
+            "-"
+        };
+        let cf = if self.clone().read_flags("CF") {
+            "C"
+        } else {
+            "-"
+        };
         write!(
             f,
-            "{:04x} {:04x} {:04x} {:04x} {:04x} {:04x} {:04x} {:04x} {:04x} {:04x}:",
+            "{:04x} {:04x} {:04x} {:04x} {:04x} {:04x} {:04x} {:04x} {}{}{}{} {:04x}:",
             self.ax,
             self.bx,
             self.cx,
@@ -214,7 +234,10 @@ impl Display for Hardware {
             self.bp,
             self.si,
             self.di,
-            self.flag,
+            zf,
+            sf,
+            of,
+            cf,
             self.ip
         )
     }

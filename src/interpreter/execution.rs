@@ -7,6 +7,8 @@ use crate::disassembler::register::WordRegister::{AX, DX};
 
 use crate::interpreter::{hardware::Hardware, utils::*};
 
+use crate::interpreter::systemcall::execute_systemcall;
+
 fn match_reg(binary_data: u8, reference: &[u8]) -> bool {
     let reg = (binary_data & 0b00111000) >> 3;
     reference.contains(&reg)
@@ -1256,7 +1258,10 @@ pub fn execute_interrupt_instruction(binary_data: &[u8], hardware: &mut Hardware
     hardware.write_flags("IF", false);
     match binary_data[0] {
         // Type Specified
-        0b11001101 => todo!(),
+        0b11001101 => match binary_data[1] {
+            0x20 => execute_systemcall(hardware),
+            _ => todo!(),
+        },
         // Type 3
         0b11001100 => todo!(),
         _ => panic!("Instruction decode error"),

@@ -10,6 +10,9 @@ pub struct Args {
     #[arg(short, long, value_name = "FILE")]
     pub d: Option<PathBuf>,
 
+    #[arg(short, long, value_name = "FILE")]
+    pub m: Option<PathBuf>,
+
     #[arg(long, action = clap::ArgAction::Count)]
     debug: u8,
 }

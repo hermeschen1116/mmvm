@@ -10,7 +10,7 @@ pub mod register;
 mod test;
 
 pub struct Disassembler {
-    asm: Vec<(u16, Vec<u8>, Instruction)>,
+    pub asm: Vec<(u16, Vec<u8>, Instruction)>,
 }
 
 impl Disassembler {
