@@ -1,15 +1,16 @@
 use core::error::Source;
 use std::intrinsics::unreachable;
 use std::ops::{BitAnd, BitOr, BitXor};
-use std::result;
+use std::{clone, result};
 
 use crate::disassembler::direction::Direction;
 use crate::disassembler::numerical::Immediate;
-use crate::disassembler::register::ByteRegister::{AH, AL};
+use crate::disassembler::register::ByteRegister::{AH, AL, CL};
 use crate::disassembler::register::Register;
 use crate::disassembler::register::WordRegister::{AX, DX};
 
 use crate::interpreter::{hardware::Hardware, utils::*};
+use crate::utils::header::Header;
 
 fn match_reg(binary_data: u8, reference: &[u8]) -> bool {
     let reg = (binary_data & 0b00111000) >> 3;
@@ -237,7 +238,7 @@ pub fn execute_load_instruction(binary_data: &[u8], hardware: &mut Hardware) {
     }
 }
 
-pub fn execute_arithmic_instruction(binary_data: &[u8]) -> (usize, Option<Instruction>) {
+pub fn execute_arithmic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
     let w = binary_data[0] & 0b00000001;
     match binary_data[0] {
         // Reg./Memory with Register to Either
@@ -246,26 +247,65 @@ pub fn execute_arithmic_instruction(binary_data: &[u8]) -> (usize, Option<Instru
         | 0b00101000..=0b00101011
         | 0b00011000..=0b00011011
         | 0b00111000..=0b00111011 => {
-            let instruction = match (binary_data[0] & 0b00111000) >> 3 {
-                0b000 => ADD,
-                0b010 => ADC,
-                0b101 => SUB,
-                0b011 => SSB,
-                0b111 => CMP,
-                _ => return panic!("Instruction decode error"),
-            };
             let d = (binary_data[0] & 0b00000010) >> 1;
-            if let (l, Some(reg), Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11111111)
+            if let (_, Some(reg), Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11111111)
             {
-                (
-                    2 + l,
-                    Some(Instruction::AddressToAddress(
-                        instruction,
-                        Direction::from(d),
-                        reg,
-                        r_m,
-                    )),
-                )
+                let value_1 = read_from_address(w == 0b1, &reg, hardware)
+                    .expect("Unable to retrieve data");
+                let value_2 = read_from_address(w == 0b1, &r_m, hardware)
+                    .expect("Unable to retrieve data");
+                match (value_1, value_2) {
+                	(Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
+                 	let (result, overflow) = match (binary_data[0] & 0b00111000) >> 3 {
+                     0b000 => {
+                     	let (result, overflow) = i8::from(value_1).overflowing_add(i8::from(value_2));
+                      	match Direction::from(d) {
+                        Direction::FromReg => write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware),
+                        Direction::ToReg => write_to_address(&reg, &Immediate::UnsignedByte(result as u8), hardware),
+                    };
+                    (result, overflow)
+                     }
+                     0b010 => {
+                     	let (result, _) = i8::from(value_1).overflowing_add(i8::from(value_2));
+                      	let (result, overflow) = result.overflowing_add(i8::from(hardware.clone().read_flags("CF")));
+                      	match Direction::from(d) {
+                        Direction::FromReg => write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware),
+                        Direction::ToReg => write_to_address(&reg, &Immediate::UnsignedByte(result as u8), hardware),
+                    };
+                    (result, overflow)
+                     }
+                     0b101 => {
+                     	let (result, _) = i8::from(value_1).overflowing_add(i8::from(value_2));
+                      	let (result, overflow) = result.overflowing_add(i8::from(hardware.clone().read_flags("CF")));
+                      	match Direction::from(d) {
+                        Direction::FromReg => write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware),
+                        Direction::ToReg => write_to_address(&reg, &Immediate::UnsignedByte(result as u8), hardware),
+                    };
+                    (result, overflow)
+                     }
+                     0b011 => {
+                     	let (result, _) = i8::from(value_1).overflowing_add(i8::from(value_2));
+                      	let (result, overflow) = result.overflowing_add(i8::from(hardware.clone().read_flags("CF")));
+                      	match Direction::from(d) {
+                        Direction::FromReg => write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware),
+                        Direction::ToReg => write_to_address(&reg, &Immediate::UnsignedByte(result as u8), hardware),
+                    };
+                    (result, overflow)
+                     }
+                     0b111 => {
+                     	let (result, _) = i8::from(value_1).overflowing_add(i8::from(value_2));
+                      	let (result, overflow) = result.overflowing_add(i8::from(hardware.clone().read_flags("CF")));
+                      	match Direction::from(d) {
+                        Direction::FromReg => write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware),
+                        Direction::ToReg => write_to_address(&reg, &Immediate::UnsignedByte(result as u8), hardware),
+                    };
+                    (result, overflow)
+                     }
+                     _ => return panic!("Instruction decode error"),
+                 }
+                 (Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) =>{}
+                    _ => unreachable!(),
+                }
             } else {
                 panic!("Instruction decode error")
             }
@@ -337,7 +377,7 @@ pub fn execute_increase_decrease_instruction(binary_data: &[u8], hardware: &mut 
             if let (_, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
                 if (binary_data[1] & 0b00111000) == 0b00000000 {
                     let result = match read_from_address(w == 0b1, &r_m, hardware)
-                        .unwrap_or(panic!("cannot retrieve data"))
+                        .expect("Unable to retrieve data")
                     {
                         Immediate::UnsignedWord(imme) => {
                             let (result, overflow) = i16::from(imme).overflowing_add(1i16);
@@ -541,42 +581,135 @@ pub fn execute_not_instruction(binary_data: &[u8], hardware: &mut Hardware) {
     }
 }
 
-pub fn execute_shift_instruction(binary_data: &[u8]) -> (usize, Option<Instruction>) {
+pub fn execute_shift_instruction(binary_data: &[u8], hardware: &mut Hardware) {
     let v = (binary_data[0] & 0b00000010) >> 1;
     let w = binary_data[0] & 0b00000001;
-
-    let instruction = match binary_data[1] & 0b00111000 {
-        0b00100000 => SHL,
-        0b00101000 => SHR,
-        0b00111000 => SAR,
-        0b00000000 => todo!("ROL"),
-        0b00001000 => todo!("ROR"),
-        0b00010000 => RCL,
-        0b00011000 => todo!("RCR"),
-        _ => return panic!("Instruction decode error"),
-    };
-
-    if let (l, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
-        if v == 0b1 {
-            (
-                2 + l,
-                Some(Instruction::AddressToAddress(
-                    instruction,
-                    Direction::FromReg,
-                    Addressing::RegisterAddressing(Register::ByteReg(CL)),
-                    r_m,
-                )),
-            )
+    if let (_, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
+        let source = read_from_address(w == 0b1, &r_m, hardware)
+            .expect("Unable to retrieve data");
+        let offset = if v == 0b1 {
+            hardware.read_from_byte_register(CL) & 0x1f
         } else {
-            (
-                2 + l,
-                Some(Instruction::ImmediateToAddress(
-                    instruction,
-                    r_m,
-                    Numerical::Imme(Immediate::UnsignedByte(0b1)),
-                )),
-            )
-        }
+            1u8
+        };
+        match binary_data[1] & 0b00111000 {
+            0b00100000 => match source {
+                Immediate::UnsignedByte(source) => {
+                    let (result, _) = source.overflowing_shl((offset - 1) as u32);
+                    let carry = (result & 0x80) >> 7;
+                    let (result, _) = source.overflowing_shl(1);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", i8::from(result) < 0);
+                    hardware.write_flags("OF", ((result & 0x80) >> 7) != carry);
+                    hardware.write_flags("CF", result == 0b1);
+                    write_to_address(&r_m, &Immediate::UnsignedByte(result), hardware);
+                }
+                Immediate::UnsignedWord(source) => {
+                    let (result, _) = source.overflowing_shl((offset - 1) as u32);
+                    let carry = (result & 0x8000) >> 15;
+                    let (result, _) = source.overflowing_shl(1);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", i16::from(result) < 0);
+                    hardware.write_flags("OF", ((result & 0x8000) >> 15) != carry);
+                    hardware.write_flags("CF", result == 0b1);
+                    write_to_address(&r_m, &Immediate::UnsignedWord(result), hardware);
+                }
+                _ => unreachable!(),
+            },
+            0b00101000 => match source {
+                Immediate::UnsignedByte(source) => {
+                    let (result, _) = source.overflowing_shr((offset - 1) as u32);
+                    let carry = result & 0x01;
+                    let (result, _) = source.overflowing_shr(1);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", i8::from(result) < 0);
+                    if v == 0b0 {
+                        hardware.write_flags("OF", ((result & 0x80) >> 7) == 0b1);
+                    }
+                    hardware.write_flags("CF", result == 0b1);
+                    write_to_address(&r_m, &Immediate::UnsignedByte(result), hardware);
+                }
+                Immediate::UnsignedWord(source) => {
+                    let (result, _) = source.overflowing_shr((offset - 1) as u32);
+                    let carry = result & 0x0001;
+                    let (result, _) = source.overflowing_shr(1);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", i16::from(result) < 0);
+                    if v == 0b0 {
+                        hardware.write_flags("OF", ((result & 0x8000) >> 15) == 0b1);
+                    }
+                    hardware.write_flags("CF", result == 0b1);
+                    write_to_address(&r_m, &Immediate::UnsignedWord(result), hardware);
+                }
+                _ => unreachable!(),
+            },
+            0b00111000 => match source {
+                Immediate::UnsignedByte(source) => {
+                    let source = i8::from(source);
+                    let (result, _) = source.overflowing_shr((offset - 1) as u32);
+                    let carry = (result as u8) & 0x01;
+                    let (result, _) = source.overflowing_shr(1);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", i8::from(result) < 0);
+                    if v == 0b0 {
+                        hardware.write_flags("OF", false);
+                    }
+                    hardware.write_flags("CF", result == 0b1);
+                    write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware);
+                }
+                Immediate::UnsignedWord(source) => {
+                    let source = i16::from(source);
+                    let (result, _) = source.overflowing_shr((offset - 1) as u32);
+                    let carry = (result as u16) & 0x0001;
+                    let (result, _) = source.overflowing_shr(1);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", i16::from(result) < 0);
+                    if v == 0b0 {
+                        hardware.write_flags("OF", false);
+                    }
+                    hardware.write_flags("CF", result == 0b1);
+                    write_to_address(&r_m, &Immediate::UnsignedWord(result as u16), hardware);
+                }
+                _ => unreachable!(),
+            },
+            0b00000000 => todo!("ROL"),
+            0b00001000 => todo!("ROR"),
+            0b00010000 => match source {
+                Immediate::UnsignedByte(source) => {
+                    let (result, _) = source.overflowing_shl((offset - 1) as u32);
+                    let carry = (result & 0x80) >> 7;
+                    let (result, _) = source.overflowing_shl(1);
+                    result = if hardware.read_flags("CF") {
+                        result | 0x01
+                    } else {
+                        result & 0xfe
+                    };
+                    if v == 0b0 {
+                        hardware.write_flags("OF", (((result & 0x80) >> 7) ^ carry) == 0b1);
+                    }
+                    hardware.write_flags("CF", carry == 0b1);
+                    write_to_address(&r_m, &Immediate::UnsignedByte(result), hardware);
+                }
+                Immediate::UnsignedWord(source) => {
+                    let (result, _) = source.overflowing_shl((offset - 1) as u32);
+                    let carry = (result & 0x8000) >> 15;
+                    let (result, _) = source.overflowing_shl(1);
+                    result = if hardware.read_flags("CF") {
+                        result | 0x0001
+                    } else {
+                        result & 0xfffe
+                    };
+                    if v == 0b0 {
+                        hardware.write_flags("OF", (((result & 0x8000) >> 15) ^ carry) == 0b1);
+                    }
+                    hardware.write_flags("CF", carry == 0b1);
+                    write_to_address(&r_m, &Immediate::UnsignedWord(result), hardware);
+                }
+                _ => unreachable!(),
+            },
+            0b00011000 => todo!("RCR"),
+            _ => return panic!("Instruction decode error"),
+        };
     } else {
         panic!("Instruction decode error")
     }
@@ -591,9 +724,9 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
             if let (_, Some(reg), Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11111111)
             {
                 let value_1 = read_from_address(w == 0b1, &reg, hardware)
-                    .unwrap_or(panic!("Unable to retrieve data"));
+                    .expect("Unable to retrieve data");
                 let value_2 = read_from_address(w == 0b1, &r_m, hardware)
-                    .unwrap_or(panic!("Unable to retrieve data"));
+                    .expect("Unable to retrieve data");
                 match (value_1, value_2) {
                     (Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
                         let result = match binary_data[0] & 0b11111100 {
@@ -644,9 +777,9 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                 Addressing::RegisterAddressing(Register::decode(w == 0b1, true, 0b000).unwrap()),
                 hardware,
             )
-            .unwrap_or(panic!("Unable to retrieve data"));
+            .expect("Unable to retrieve data");
             let (_, value_2) = decode_data(w == 0b1, true, &binary_data[1..]);
-            let value_2 = value_2.unwrap_or(panic!("Unable to retrieve data"));
+            let value_2 = value_2.expect("Unable to retrieve data");
             match (value_1, value_2) {
                 (Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
                     let result = match binary_data[0] & 0b11111110 {
@@ -677,9 +810,9 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
         0b10000000..=0b10000011 => {
             if let (rl, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
                 let value_1 = read_from_address(w == 0b1, &r_m, hardware)
-                    .unwrap_or(panic!("Unable to retrieve data"));
+                    .expect("Unable to retrieve data");
                 let (_, value_2) = decode_data(w == 0b1, false, &binary_data[(2 + rl)..]);
-                let value_2 = value_2.unwrap_or(panic!("Unable to retrieve data"));
+                let value_2 = value_2.expect("Unable to retrieve data");
                 match (value_1, value_2) {
                     (Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
                         let result = match binary_data[1] & 0b00111000 {
@@ -723,9 +856,9 @@ pub fn execute_test_instruction(binary_data: &[u8], hardware: &mut Hardware) {
             if let (_, Some(reg), Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11111111)
             {
                 let value_1 = read_from_address(w == 0b1, &reg, hardware)
-                    .unwrap_or(panic!("Unable to retrieve data"));
+                    .expect("Unable to retrieve data");
                 let value_2 = read_from_address(w == 0b1, &r_m, hardware)
-                    .unwrap_or(panic!("Unable to retrieve data"));
+                    .expect("Unable to retrieve data");
                 (value_1, value_2)
             } else {
                 panic!("Instruction decode error")
@@ -735,11 +868,11 @@ pub fn execute_test_instruction(binary_data: &[u8], hardware: &mut Hardware) {
         0b11110110 | 0b11110111 if (binary_data[1] & 0b00111000) == 0b0 => {
             if let (rl, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
                 let value_1 = read_from_address(w == 0b1, &r_m, hardware)
-                    .unwrap_or(panic!("Unable to retrieve data"));
+                    .expect("Unable to retrieve data");
                 let (_, value_2) = decode_data(w == 0b1, false, &binary_data[(2 + rl)..]);
                 (
                     value_1,
-                    value_2.unwrap_or(panic!("Unable to retrieve data")),
+                    value_2.expect("Unable to retrieve data"),
                 )
             } else {
                 panic!("Instruction decode error")
@@ -752,11 +885,11 @@ pub fn execute_test_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                 &Addressing::RegisterAddressing(Register::decode(w == 0b1, true, 0b000).unwrap()),
                 hardware,
             )
-            .unwrap_or(panic!("Unable to retrieve data"));
+            .expect("Unable to retrieve data");
             let (_, value_2) = decode_data(w == 0b1, false, &binary_data[1..]);
             (
                 value_1,
-                value_2.unwrap_or(panic!("Unable to retrieve data")),
+                value_2.expect("Unable to retrieve data"),
             );
         }
         _ => panic!("Instruction decode error"),
@@ -779,120 +912,110 @@ pub fn execute_test_instruction(binary_data: &[u8], hardware: &mut Hardware) {
 }
 
 pub fn execute_string_instruction(binary_data: &[u8], hardware: &mut Hardware) {
+    let w = binary_data[0] & 0b00000001;
     match binary_data[0] {
-        // MOVS (Byte)
-        0b10100100 => todo!(),
-        // MOVS (Word)
-        0b10100101 => todo!(),
-        // CMPS (Byte)
-        0b10100110 => todo!("CMPSB"),
-        // CMPS (Word)
-        0b10100111 => todo!("CMPSW"),
-        // SCAS (Byte)
-        0b10101110 => todo!("SCASB"),
-        // SCAS (Word)
-        0b10101111 => todo!("SCASW"),
-        // LODS (Byte)
-        0b10101100 => todo!("LODSB"),
-        // LODS (Word)
-        0b10101101 => todo!("LODSW"),
-        // STOS (Byte)
-        0b10101010 => todo!("STOSB"),
-        // STOS (Word)
-        0b10101011 => todo!("STOSW"),
+        0b10100100 | 0b10100101 => {
+            let source_address = hardware.ds << 4 + hardware.si;
+            let target_address = hardware.es << 4 + hardware.di;
+            if w == 0b0 {
+                hardware.write_byte_to_memory(
+                    target_address,
+                    hardware
+                        .clone()
+                        .read_byte_from_memory(source_address)
+                        .expect("Unable to retrieve data"),
+                );
+                let offset = if hardware.read_flags("DF") { -0b1 } else { 0b1 };
+                hardware.si += offset;
+                hardware.di += offset;
+            } else {
+                hardware.write_word_to_memory(
+                    target_address,
+                    hardware
+                        .clone()
+                        .read_word_from_memory(source_address)
+                        .expect("Unable to retrieve data"),
+                );
+                let offset = if hardware.read_flags("DF") {
+                    -0b10
+                } else {
+                    0b10
+                };
+                hardware.si += offset;
+                hardware.di += offset;
+            }
+        }
+        0b10100110 | 0b10100111 => todo!("CMPS"),
+        0b10101110 | 0b10101111 => todo!("SCAS"),
+        0b10101100 | 0b10101101 => todo!("LODSW"),
+        0b10101010 | 0b10101011 => todo!("STOSW"),
         _ => panic!("Instruction decode error"),
     }
 }
 
-pub fn execute_repeat_instruction(binary_data: &[u8]) -> (usize, Option<Instruction>) {
-    let instruction = match binary_data[0] {
-        0b11110010 => REP,
-        0b11110011 => REPNE,
+pub fn execute_repeat_instruction(binary_data: &[u8], hardware: &mut Hardware) {
+    match binary_data[0] {
+        0b11110010 => {
+            while hardware.cx != 0 {
+                execute_string_instruction(&binary_data[1..], hardware);
+                hardware.cx -= 1;
+            }
+        }
+        0b11110011 => {
+            while (hardware.cx != 0) | hardware.clone().read_flags("ZF") {
+                execute_string_instruction(&binary_data[1..], hardware);
+                hardware.cx -= 1;
+            }
+        }
         _ => return panic!("Instruction decode error"),
     };
-    if let (l, Some(Instruction::Standalone(sub_instruction))) =
-        decode_string_instruction(&binary_data[1..])
-    {
-        (
-            1 + l,
-            Some(Instruction::WithInstruction(instruction, sub_instruction)),
-        )
-    } else {
-        panic!("Instruction decode error")
-    }
 }
 
-pub fn execute_jump_instruction(pc: u16, binary_data: &[u8]) -> (usize, Option<Instruction>) {
+pub fn execute_jump_instruction(binary_data: &[u8], hardware: &mut Hardware) {
     match binary_data[0] {
         // CALL / JMP (Direct within Segment)
         0b11101000 | 0b11101001 => {
-            let instruction = match binary_data[0] & 0b1 {
-                0b0 => CALL,
-                0b1 => JMP,
-                _ => return panic!("Instruction decode error"),
-            };
             if binary_data.len() < 3 {
                 return panic!("Instruction decode error");
             }
             let immediate = u16::from_le_bytes((&binary_data[1..3]).try_into().unwrap());
-            let displacement = match binary_data[2] & 0x80 {
-                0x0 => (pc as u16) + 0x3 + immediate,
-                _ => ((pc as i16) + 3i16 - ((immediate as i16) * -1i16)) as u16,
+            hardware.ip = match binary_data[2] & 0x80 {
+                0x0 => hardware.ip + 0x3 + immediate,
+                _ => (hardware.ip + 3i16 - ((immediate as i16) * -1i16)) as u16,
             };
-            (
-                3,
-                Some(Instruction::WithImmediate(
-                    instruction,
-                    Numerical::Imme(Immediate::UnsignedWord(displacement)),
-                )),
-            )
         }
         // JMP (Direct within Segment-Short)
         0b11101011 => {
             if binary_data.len() < 2 {
                 return panic!("Instruction decode error");
             }
-            let displacement = match binary_data[1] & 0x80 {
-                0x0 => (pc as u16) + 0x2 + (binary_data[1] as u16),
-                _ => (pc as u16) + 0x2 - ((!(binary_data[1] - 0b1)) as u16),
+            hardware.ip = match binary_data[1] & 0x80 {
+                0x0 => hardware.ip + 0x2 + (binary_data[1] as u16),
+                _ => hardware.ip + 0x2 - ((!(binary_data[1] - 0b1)) as u16),
             };
-            (
-                2,
-                Some(Instruction::WithImmediate(
-                    JMPSHORT,
-                    Numerical::Imme(Immediate::UnsignedWord(displacement)),
-                )),
-            )
         }
         // CALL / JMP (Indirect within Segment / Indirect Intersegment)
         0b11111111 if match_reg(binary_data[1], &[0b010, 0b011, 0b100, 0b101]) => {
-            let instruction = match (binary_data[1] & 0b00111000) >> 3 {
-                0b010 | 0b011 => CALL,
-                0b100 | 0b101 => JMP,
-                _ => return panic!("Instruction decode error"),
-            };
             if let (l, None, Some(r_m)) = Addressing::decode(0b1, &binary_data[1..], 0b11000111) {
-                (2 + l, Some(Instruction::WithAddress(instruction, r_m)))
+                match read_from_address(true, &r_m, hardware)
+                    .expect("Unable to retrieve data")
+                {
+                    Immediate::UnsignedWord(address) => hardware.ip = address,
+                    _ => unreachable!(),
+                };
             } else {
                 panic!("Instruction decode error")
             }
         }
         // Direct Intersegment
         0b10011010 | 0b11101010 => {
-            let instruction = if binary_data[0] == 0b10011010 {
-                CALL
-            } else {
-                JMP
-            };
             if let (_, Some(offset)) = decode_data(true, false, &binary_data[1..]) {
                 if let (_, Some(segment)) = decode_data(true, false, &binary_data[3..]) {
-                    (
-                        5,
-                        Some(Instruction::WithAddress(
-                            instruction,
-                            Addressing::DirectIndexAddressing(offset, segment),
-                        )),
+                    hardware.ip = calculate_effective_address(
+                        &Addressing::DirectIndexAddressing(offset, segment),
+                        hardware,
                     )
+                    .expect("Unable to retrieve data");
                 } else {
                     panic!("Instruction decode error")
                 }
@@ -910,15 +1033,15 @@ pub fn execute_return_instruction(binary_data: &[u8], hardware: &mut Hardware) {
         0b11000011 => {
             hardware.ip = hardware
                 .pop_from_stack()
-                .unwrap_or(panic!("Unable to retrieve data"));
+                .expect("Unable to retrieve data");
         }
         // Within Seg Adding Immed to SP
         0b11000010 => {
             let ip = hardware
                 .pop_from_stack()
-                .unwrap_or(panic!("Unable to retrieve data"));
+                .expect("Unable to retrieve data");
             let (_, disp) = decode_data(true, false, &binary_data[1..]);
-            hardware.ip = match disp.unwrap_or(panic!("Unable to retrieve data")) {
+            hardware.ip = match disp.expect("Unable to retrieve data") {
                 Immediate::UnsignedWord(disp) => ((ip as i16) + i16::from(disp)) as u16,
                 _ => unreachable!(),
             };
@@ -1046,7 +1169,7 @@ pub fn execute(binary_data: &[u8], hardware: &mut Hardware) {
         {
             match (binary_data[1] & 0b00111000) >> 3 {
                 0b110 => execute_push_pop_instruction(binary_data, hardware),
-                0b010 | 0b011 | 0b100 | 0b101 => execute_jump_instruction(pc, binary_data),
+                0b010 | 0b011 | 0b100 | 0b101 => execute_jump_instruction(binary_data, hardware),
                 0b000 | 0b001 => execute_increase_decrease_instruction(binary_data, hardware),
                 _ => panic!("Instruction decode error"),
             }
@@ -1059,7 +1182,7 @@ pub fn execute(binary_data: &[u8], hardware: &mut Hardware) {
         0b10001101 | 0b11000101 | 0b11000100 => execute_load_instruction(binary_data, hardware),
         // CALL (Direct within Segment / Direct Intersegment), JMP (Direct within Segment-Short / Direct within Segment / Direct Intersegment)
         0b11101000 | 0b10011010 | 0b11101001 | 0b11101011 | 0b11101010 => {
-            execute_jump_instruction(pc, binary_data)
+            execute_jump_instruction(binary_data, hardware)
         }
         // RET (Within Segment Adding Immediate to SP / Intersegment Adding Immediate to SP)
         0b11000010 | 0b11001010 => execute_return_instruction(binary_data, hardware),
@@ -1104,17 +1227,17 @@ pub fn execute(binary_data: &[u8], hardware: &mut Hardware) {
         | 0b00010000..=0b00010011
         | 0b00101000..=0b00101011
         | 0b00011000..=0b00011011
-        | 0b00111000..=0b00111011 => execute_arithmic_instruction(binary_data),
+        | 0b00111000..=0b00111011 => execute_arithmic_instruction(binary_data, hardware),
         // ADD / ADC / SUB / SSB / CMP (Immediate from Register/Memory)
         0b10000000..=0b10000011
             if match_reg(binary_data[1], &[0b000, 0b010, 0b011, 0b101, 0b111]) =>
         {
-            execute_arithmic_instruction(binary_data)
+            execute_arithmic_instruction(binary_data, hardware)
         }
         // ADD / ADC / SUB / SSB / CMP (Immediate to Accumulator)
         0b00000100 | 0b00000101 | 0b00010100 | 0b00010101 | 0b00101100 | 0b00101101
         | 0b00011100 | 0b00011101 | 0b00111100 | 0b00111101 => {
-            execute_arithmic_instruction(binary_data)
+            execute_arithmic_instruction(binary_data, hardware)
         }
         // INC / DEC (Register/Memory)
         0b11111110 if match_reg(binary_data[1], &[0b000, 0b001]) => {
@@ -1151,7 +1274,7 @@ pub fn execute(binary_data: &[u8], hardware: &mut Hardware) {
                 &[0b000, 0b001, 0b010, 0b011, 0b100, 0b101, 0b111],
             ) =>
         {
-            execute_shift_instruction(binary_data)
+            execute_shift_instruction(binary_data, hardware)
         }
         // AND / OR / XOR (Reg./Memory and Register to Either, Immediate to Accumulator )
         0b00100000..=0b00100011
@@ -1171,13 +1294,8 @@ pub fn execute(binary_data: &[u8], hardware: &mut Hardware) {
         0b10000100 | 0b10000101 | 0b10101000 | 0b10101001 => {
             execute_test_instruction(binary_data, hardware)
         }
-        // string manipulation
-        0b10100100 | 0b10100101 | 0b10100110 | 0b10100111 | 0b10101110 | 0b10101111
-        | 0b10101100 | 0b10101101 | 0b10101010 | 0b10101011 => {
-            execute_string_instruction(binary_data, hardware)
-        }
         // REP
-        0b11110010 | 0b11110011 => execute_repeat_instruction(binary_data),
+        0b11110010 | 0b11110011 => execute_repeat_instruction(binary_data, hardware),
         // ESC
         0b11011000 | 0b11011111 => todo!("ESC"),
         _ => panic!("Instruction decode error"),
