@@ -1,16 +1,11 @@
-use core::error::Source;
-use std::intrinsics::unreachable;
-use std::ops::{BitAnd, BitOr, BitXor};
-use std::{clone, result};
-
+use crate::disassembler::addressing::Addressing;
 use crate::disassembler::direction::Direction;
-use crate::disassembler::numerical::Immediate;
+use crate::disassembler::numerical::{Immediate, Numerical};
 use crate::disassembler::register::ByteRegister::{AH, AL, CL};
 use crate::disassembler::register::Register;
 use crate::disassembler::register::WordRegister::{AX, DX};
 
 use crate::interpreter::{hardware::Hardware, utils::*};
-use crate::utils::header::Header;
 
 fn match_reg(binary_data: u8, reference: &[u8]) -> bool {
     let reg = (binary_data & 0b00111000) >> 3;
@@ -21,26 +16,14 @@ pub fn decode_data(
     word_mode: bool,
     sign_enable: bool,
     binary_data: &[u8],
-) -> (usize, Option<Numerical>) {
+) -> (usize, Option<Immediate>) {
     if binary_data.is_empty() {
         return (0, None);
     }
     if !word_mode {
-        (
-            1,
-            Some(Numerical::Imme(Immediate::from(
-                &binary_data[0..1],
-                sign_enable,
-            ))),
-        )
+        (1, Some(Immediate::from(&binary_data[0..1], sign_enable)))
     } else {
-        (
-            2,
-            Some(Numerical::Imme(Immediate::from(
-                &binary_data[0..2],
-                sign_enable,
-            ))),
-        )
+        (2, Some(Immediate::from(&binary_data[0..2], sign_enable)))
     }
 }
 
@@ -52,7 +35,7 @@ pub fn execute_move_instruction(binary_data: &[u8], hardware: &mut Hardware) {
             let w = binary_data[0] & 0b00000001;
             if let (_, Some(reg), Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11111111)
             {
-                write_from_address_to_address(Direction::from(d), reg, r_m, hardware)
+                write_from_address_to_address(Direction::from(d), &reg, &r_m, hardware)
             } else {
                 panic!("Instruction decode error")
             }
@@ -63,7 +46,7 @@ pub fn execute_move_instruction(binary_data: &[u8], hardware: &mut Hardware) {
             if let (rl, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
                 if let (_, Some(immediate)) = decode_data(w == 0b1, false, &binary_data[(2 + rl)..])
                 {
-                    write_to_address(r_m, immediate, hardware)
+                    write_to_address(&r_m, &immediate, hardware)
                 } else {
                     panic!("Instruction decode error")
                 }
@@ -75,8 +58,8 @@ pub fn execute_move_instruction(binary_data: &[u8], hardware: &mut Hardware) {
         0b10110000..=0b10111111 => {
             let w = (binary_data[0] & 0b00001000) >> 3;
             if let (_, Some(reg), None) = Addressing::decode(w, binary_data, 0b00000111) {
-                if let (dl, Some(immediate)) = decode_data(w == 0b1, false, &binary_data[1..]) {
-                    write_to_address(reg, immediate, hardware)
+                if let (_, Some(immediate)) = decode_data(w == 0b1, false, &binary_data[1..]) {
+                    write_to_address(&reg, &immediate, hardware)
                 } else {
                     panic!("Instruction decode error")
                 }
@@ -91,10 +74,10 @@ pub fn execute_move_instruction(binary_data: &[u8], hardware: &mut Hardware) {
             if let (_, Some(address)) = decode_data(true, false, &binary_data[1..]) {
                 write_from_address_to_address(
                     Direction::from(d),
-                    Addressing::RegisterAddressing(
+                    &Addressing::RegisterAddressing(
                         Register::decode(w == 0b1, true, 0b000).unwrap(),
                     ),
-                    Addressing::DirectAddressing(address),
+                    &Addressing::DirectAddressing(Numerical::Imme(address)),
                     hardware,
                 )
             } else {
@@ -106,7 +89,7 @@ pub fn execute_move_instruction(binary_data: &[u8], hardware: &mut Hardware) {
             let d = (binary_data[0] & 0b00000010) >> 1;
             if let (_, Some(reg), Some(r_m)) = Addressing::decode(0, &binary_data[1..], 0b11011111)
             {
-                write_from_address_to_address(Direction::from(d), reg, r_m, hardware)
+                write_from_address_to_address(Direction::from(d), &reg, &r_m, hardware)
             } else {
                 panic!("Instruction decode error")
             }
@@ -185,7 +168,7 @@ pub fn execute_push_pop_instruction(binary_data: &[u8], hardware: &mut Hardware)
                         panic!("Not enough data")
                     }
                 } else {
-                    return panic!("Instruction decode error");
+                    panic!("Instruction decode error");
                 }
             } else {
                 panic!("Instruction decode error")
@@ -201,8 +184,8 @@ pub fn execute_exchange_instruction(binary_data: &[u8], hardware: &mut Hardware)
             let w = binary_data[0] & 0b00000001;
             if let (_, Some(reg), Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11111111)
             {
-                let imme = read_from_address(w == 0b1, r_m, hardware)
-                    .unwrap_or(panic!("Unable to retrive data"));
+                let imme =
+                    read_from_address(w == 0b1, &r_m, hardware).expect("Unable to retrive data");
                 write_from_address_to_address(Direction::FromReg, &reg, &r_m, hardware);
                 write_to_address(&reg, &imme, hardware);
             } else {
@@ -212,8 +195,7 @@ pub fn execute_exchange_instruction(binary_data: &[u8], hardware: &mut Hardware)
         // Register with Accumulator
         0b10010000..=0b10010111 => {
             if let (_, Some(reg), None) = Addressing::decode(0, binary_data, 0b00000111) {
-                let imme = read_from_address(true, &reg, hardware)
-                    .unwrap_or(panic!("Unable to retrive data"));
+                let imme = read_from_address(true, &reg, hardware).expect("Unable to retrive data");
                 let accumulator = Addressing::RegisterAddressing(Register::WordReg(AX));
                 write_from_address_to_address(Direction::FromReg, &accumulator, &reg, hardware);
                 write_to_address(&reg, &imme, hardware);
@@ -226,15 +208,16 @@ pub fn execute_exchange_instruction(binary_data: &[u8], hardware: &mut Hardware)
 }
 
 pub fn execute_load_instruction(binary_data: &[u8], hardware: &mut Hardware) {
-    if let (_, Some(reg), Some(r_m)) = Addressing::decode(0b1, &binary_data[1..], 0b11111111) {
-        match binary_data[0] {
-            0b10001101 => write_from_address_to_address(Direction::ToReg, reg, r_m, hardware),
-            0b11000101 => todo!("LDS"),
-            0b11000100 => todo!("LES"),
-            _ => return panic!("Instruction decode error"),
-        };
-    } else {
-        panic!("Instruction decode error")
+    match (
+        Addressing::decode(0b1, &binary_data[1..], 0b11111111),
+        binary_data[0],
+    ) {
+        ((_, Some(reg), Some(r_m)), 0b10001101) => {
+            write_from_address_to_address(Direction::ToReg, &reg, &r_m, hardware)
+        }
+        ((_, Some(_), Some(_)), 0b11000101) => todo!("LDS"),
+        ((_, Some(_), Some(_)), 0b11000100) => todo!("LES"),
+        _ => panic!("Instruction decode error"),
     }
 }
 
@@ -250,62 +233,101 @@ pub fn execute_arithmic_instruction(binary_data: &[u8], hardware: &mut Hardware)
             let d = (binary_data[0] & 0b00000010) >> 1;
             if let (_, Some(reg), Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11111111)
             {
-                let value_1 = read_from_address(w == 0b1, &reg, hardware)
-                    .expect("Unable to retrieve data");
-                let value_2 = read_from_address(w == 0b1, &r_m, hardware)
-                    .expect("Unable to retrieve data");
-                match (value_1, value_2) {
-                	(Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
-                 	let (result, overflow) = match (binary_data[0] & 0b00111000) >> 3 {
-                     0b000 => {
-                     	let (result, overflow) = i8::from(value_1).overflowing_add(i8::from(value_2));
-                      	match Direction::from(d) {
-                        Direction::FromReg => write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware),
-                        Direction::ToReg => write_to_address(&reg, &Immediate::UnsignedByte(result as u8), hardware),
-                    };
-                    (result, overflow)
-                     }
-                     0b010 => {
-                     	let (result, _) = i8::from(value_1).overflowing_add(i8::from(value_2));
-                      	let (result, overflow) = result.overflowing_add(i8::from(hardware.clone().read_flags("CF")));
-                      	match Direction::from(d) {
-                        Direction::FromReg => write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware),
-                        Direction::ToReg => write_to_address(&reg, &Immediate::UnsignedByte(result as u8), hardware),
-                    };
-                    (result, overflow)
-                     }
-                     0b101 => {
-                     	let (result, _) = i8::from(value_1).overflowing_add(i8::from(value_2));
-                      	let (result, overflow) = result.overflowing_add(i8::from(hardware.clone().read_flags("CF")));
-                      	match Direction::from(d) {
-                        Direction::FromReg => write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware),
-                        Direction::ToReg => write_to_address(&reg, &Immediate::UnsignedByte(result as u8), hardware),
-                    };
-                    (result, overflow)
-                     }
-                     0b011 => {
-                     	let (result, _) = i8::from(value_1).overflowing_add(i8::from(value_2));
-                      	let (result, overflow) = result.overflowing_add(i8::from(hardware.clone().read_flags("CF")));
-                      	match Direction::from(d) {
-                        Direction::FromReg => write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware),
-                        Direction::ToReg => write_to_address(&reg, &Immediate::UnsignedByte(result as u8), hardware),
-                    };
-                    (result, overflow)
-                     }
-                     0b111 => {
-                     	let (result, _) = i8::from(value_1).overflowing_add(i8::from(value_2));
-                      	let (result, overflow) = result.overflowing_add(i8::from(hardware.clone().read_flags("CF")));
-                      	match Direction::from(d) {
-                        Direction::FromReg => write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware),
-                        Direction::ToReg => write_to_address(&reg, &Immediate::UnsignedByte(result as u8), hardware),
-                    };
-                    (result, overflow)
-                     }
-                     _ => return panic!("Instruction decode error"),
-                 }
-                 (Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) =>{}
-                    _ => unreachable!(),
-                }
+                let value_1 =
+                    read_from_address(w == 0b1, &reg, hardware).expect("Unable to retrieve data");
+                let value_2 =
+                    read_from_address(w == 0b1, &r_m, hardware).expect("Unable to retrieve data");
+                let result = match (((binary_data[0] & 0b00111000) >> 3), value_1, value_2) {
+                    (0b000, Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
+                        let (result, overflow) = (value_1 as i8).overflowing_add(value_2 as i8);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedByte(result as u8)
+                    }
+                    (0b000, Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
+                        let (result, overflow) = (value_1 as i16).overflowing_add(value_2 as i16);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedWord(result as u16)
+                    }
+                    (0b010, Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
+                        let (result, overflow) = (value_1 as i8)
+                            .carrying_add(value_2 as i8, hardware.clone().read_flags("CF"));
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedByte(result as u8)
+                    }
+                    (0b010, Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
+                        let (result, overflow) = (value_1 as i16)
+                            .carrying_add(value_2 as i16, hardware.clone().read_flags("CF"));
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedWord(result as u16)
+                    }
+                    (0b101, Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
+                        let (result, overflow) = (value_1 as i8).overflowing_sub(value_2 as i8);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedByte(result as u8)
+                    }
+                    (0b101, Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
+                        let (result, overflow) = (value_1 as i16).overflowing_sub(value_2 as i16);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedWord(result as u16)
+                    }
+                    (0b011, Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
+                        let (result, overflow) = (value_1 as i8)
+                            .borrowing_sub(value_2 as i8, hardware.clone().read_flags("CF"));
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedByte(result as u8)
+                    }
+                    (0b011, Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
+                        let (result, overflow) = (value_1 as i16)
+                            .borrowing_sub(value_2 as i16, hardware.clone().read_flags("CF"));
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedWord(result as u16)
+                    }
+                    (0b111, Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
+                        let (result, overflow) = (value_1 as i8).overflowing_sub(value_2 as i8);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", (value_2 as i8) < (value_1 as i8));
+                        Immediate::UnsignedByte(result as u8)
+                    }
+                    (0b111, Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
+                        let (result, overflow) = (value_1 as i16).overflowing_sub(value_2 as i16);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", (value_2 as i16) < (value_1 as i16));
+                        Immediate::UnsignedWord(result as u16)
+                    }
+                    _ => panic!("Instruction decode error"),
+                };
+                match Direction::from(d) {
+                    Direction::FromReg => write_to_address(&r_m, &result, hardware),
+                    Direction::ToReg => write_to_address(&reg, &result, hardware),
+                };
             } else {
                 panic!("Instruction decode error")
             }
@@ -313,54 +335,207 @@ pub fn execute_arithmic_instruction(binary_data: &[u8], hardware: &mut Hardware)
         // Immediate to Accumulator
         0b00000100 | 0b00000101 | 0b00010100 | 0b00010101 | 0b00101100 | 0b00101101
         | 0b00011100 | 0b00011101 | 0b00111100 | 0b00111101 => {
-            let instruction = match (binary_data[0] & 0b00111100) >> 2 {
-                0b0001 => ADD,
-                0b0101 => ADC,
-                0b1011 => SUB,
-                0b0111 => SSB,
-                0b1111 => CMP,
-                _ => return panic!("Instruction decode error"),
+            let (_, imme) = decode_data(w == 0b1, false, &binary_data[1..]);
+            match (
+                ((binary_data[0] & 0b00111100) >> 2),
+                imme.expect("Unable to retrieve data"),
+            ) {
+                (0b0001, Immediate::UnsignedByte(imme)) => {
+                    let al = hardware.clone().read_from_byte_register(AL);
+                    let (result, overflow) = (al as i8).overflowing_add(imme as i8);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", result < 0);
+                    hardware.write_flags("OF", overflow);
+                    hardware.write_flags("CF", overflow);
+                    hardware.write_to_byte_register(AL, result as u8)
+                }
+                (0b0001, Immediate::UnsignedWord(imme)) => {
+                    let (result, overflow) = (hardware.ax as i16).overflowing_add(imme as i16);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", result < 0);
+                    hardware.write_flags("OF", overflow);
+                    hardware.write_flags("CF", overflow);
+                    hardware.ax = result as u16;
+                }
+                (0b0101, Immediate::UnsignedByte(imme)) => {
+                    let al = hardware.clone().read_from_byte_register(AL);
+                    let (result, overflow) =
+                        (al as i8).carrying_add(imme as i8, hardware.clone().read_flags("CF"));
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", result < 0);
+                    hardware.write_flags("OF", overflow);
+                    hardware.write_flags("CF", overflow);
+                    hardware.write_to_byte_register(AL, result as u8)
+                }
+                (0b0101, Immediate::UnsignedWord(imme)) => {
+                    let (result, overflow) = (hardware.ax as i16)
+                        .carrying_add(imme as i16, hardware.clone().read_flags("CF"));
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", result < 0);
+                    hardware.write_flags("OF", overflow);
+                    hardware.write_flags("CF", overflow);
+                    hardware.ax = result as u16;
+                }
+                (0b1011, Immediate::UnsignedByte(imme)) => {
+                    let al = hardware.clone().read_from_byte_register(AL);
+                    let (result, overflow) = (al as i8).overflowing_sub(imme as i8);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", result < 0);
+                    hardware.write_flags("OF", overflow);
+                    hardware.write_flags("CF", overflow);
+                    hardware.write_to_byte_register(AL, result as u8)
+                }
+                (0b1011, Immediate::UnsignedWord(imme)) => {
+                    let (result, overflow) = (hardware.ax as i16).overflowing_sub(imme as i16);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", result < 0);
+                    hardware.write_flags("OF", overflow);
+                    hardware.write_flags("CF", overflow);
+                    hardware.ax = result as u16;
+                }
+                (0b0111, Immediate::UnsignedByte(imme)) => {
+                    let al = hardware.clone().read_from_byte_register(AL);
+                    let (result, overflow) =
+                        (al as i8).borrowing_sub(imme as i8, hardware.clone().read_flags("CF"));
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", result < 0);
+                    hardware.write_flags("OF", overflow);
+                    hardware.write_flags("CF", overflow);
+                    hardware.write_to_byte_register(AL, result as u8)
+                }
+                (0b0111, Immediate::UnsignedWord(imme)) => {
+                    let (result, overflow) = (hardware.ax as i16)
+                        .borrowing_sub(imme as i16, hardware.clone().read_flags("CF"));
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", result < 0);
+                    hardware.write_flags("OF", overflow);
+                    hardware.write_flags("CF", overflow);
+                    hardware.ax = result as u16;
+                }
+                (0b1111, Immediate::UnsignedByte(imme)) => {
+                    let al = hardware.clone().read_from_byte_register(AL);
+                    let (result, overflow) = (al as i8).overflowing_sub(imme as i8);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", result < 0);
+                    hardware.write_flags("OF", overflow);
+                    hardware.write_flags("CF", (al as i8) < (imme as i8));
+                    hardware.write_to_byte_register(AL, result as u8)
+                }
+                (0b1111, Immediate::UnsignedWord(imme)) => {
+                    let (result, overflow) = (hardware.ax as i16).overflowing_sub(imme as i16);
+                    hardware.write_flags("ZF", result == 0);
+                    hardware.write_flags("SF", result < 0);
+                    hardware.write_flags("OF", overflow);
+                    hardware.write_flags("CF", (hardware.ax as i8) < (imme as i8));
+                    hardware.ax = result as u16;
+                }
+                _ => panic!("Instruction decode error"),
             };
-            if let (l, Some(immediate)) = decode_data(w == 0b1, false, &binary_data[1..]) {
-                (
-                    1 + l,
-                    Some(Instruction::ImmediateToAddress(
-                        instruction,
-                        Addressing::RegisterAddressing(
-                            Register::decode(w == 0b1, true, 0b000).unwrap(),
-                        ),
-                        immediate,
-                    )),
-                )
-            } else {
-                panic!("Instruction decode error")
-            }
         }
         // Immediate to Register/Memory
         0b10000000..=0b10000011 => {
             let s = (binary_data[0] & 0b00000010) >> 1;
             if let (rl, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
-                if let (dl, Some(immediate)) = decode_data(
+                let value_1 =
+                    read_from_address(w == 0b1, &r_m, hardware).expect("Unable to retrieve data");
+                let value_2 = match decode_data(
                     (w == 0b1) & (s != 0b1),
                     (s == 0b1) & ((binary_data[2 + rl] as i8) < 0i8),
                     &binary_data[(2 + rl)..],
                 ) {
-                    let instruction = match binary_data[1] & 0b00111000 {
-                        0b00000000 => ADD,
-                        0b00010000 => ADC,
-                        0b00101000 => SUB,
-                        0b00011000 => SSB,
-                        0b00111000 if w == 0b1 => CMP,
-                        0b00111000 if w == 0b0 => CMPBYTE,
-                        _ => return panic!("Instruction decode error"),
-                    };
-                    (
-                        2 + rl + dl,
-                        Some(Instruction::ImmediateToAddress(instruction, r_m, immediate)),
-                    )
-                } else {
-                    panic!("Instruction decode error")
-                }
+                    (_, Some(Immediate::SignedByte(imme))) => Immediate::UnsignedByte(imme as u8),
+                    (_, Some(Immediate::SignedWord(imme))) => Immediate::UnsignedWord(imme as u16),
+                    (_, Some(imme)) => imme,
+                    _ => panic!("Unable to retrieve data"),
+                };
+                let result = match (((binary_data[1] & 0b00111000) >> 3), value_1, value_2) {
+                    (0b000, Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
+                        let (result, overflow) = (value_1 as i8).overflowing_add(value_2 as i8);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedByte(result as u8)
+                    }
+                    (0b000, Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
+                        let (result, overflow) = (value_1 as i16).overflowing_add(value_2 as i16);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedWord(result as u16)
+                    }
+                    (0b010, Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
+                        let (result, overflow) = (value_1 as i8)
+                            .carrying_add(value_2 as i8, hardware.clone().read_flags("CF"));
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedByte(result as u8)
+                    }
+                    (0b010, Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
+                        let (result, overflow) = (value_1 as i16)
+                            .carrying_add(value_2 as i16, hardware.clone().read_flags("CF"));
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedWord(result as u16)
+                    }
+                    (0b101, Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
+                        let (result, overflow) = (value_1 as i8).overflowing_sub(value_2 as i8);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedByte(result as u8)
+                    }
+                    (0b101, Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
+                        let (result, overflow) = (value_1 as i16).overflowing_sub(value_2 as i16);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedWord(result as u16)
+                    }
+                    (0b011, Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
+                        let (result, overflow) = (value_1 as i8)
+                            .borrowing_sub(value_2 as i8, hardware.clone().read_flags("CF"));
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedByte(result as u8)
+                    }
+                    (0b011, Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
+                        let (result, overflow) = (value_1 as i16)
+                            .borrowing_sub(value_2 as i16, hardware.clone().read_flags("CF"));
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", overflow);
+                        Immediate::UnsignedWord(result as u16)
+                    }
+                    (0b111, Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
+                        let (result, overflow) = (value_1 as i8).overflowing_sub(value_2 as i8);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", (value_2 as i8) < (value_1 as i8));
+                        Immediate::UnsignedByte(result as u8)
+                    }
+                    (0b111, Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
+                        let (result, overflow) = (value_1 as i16).overflowing_sub(value_2 as i16);
+                        hardware.write_flags("ZF", result == 0);
+                        hardware.write_flags("SF", result < 0);
+                        hardware.write_flags("OF", overflow);
+                        hardware.write_flags("CF", (value_2 as i16) < (value_1 as i16));
+                        Immediate::UnsignedWord(result as u16)
+                    }
+                    _ => panic!("Instruction decode error"),
+                };
+                write_to_address(&r_m, &result, hardware)
             } else {
                 panic!("Instruction decode error")
             }
@@ -380,14 +555,14 @@ pub fn execute_increase_decrease_instruction(binary_data: &[u8], hardware: &mut 
                         .expect("Unable to retrieve data")
                     {
                         Immediate::UnsignedWord(imme) => {
-                            let (result, overflow) = i16::from(imme).overflowing_add(1i16);
+                            let (result, overflow) = (imme as i16).overflowing_add(1i16);
                             hardware.write_flags("ZF", result == 0);
                             hardware.write_flags("SF", result < 0);
                             hardware.write_flags("OF", overflow);
                             Immediate::UnsignedWord(result as u16)
                         }
                         Immediate::UnsignedByte(imme) => {
-                            let (result, overflow) = i8::from(imme).overflowing_add(1i8);
+                            let (result, overflow) = (imme as i8).overflowing_add(1i8);
                             hardware.write_flags("ZF", result == 0);
                             hardware.write_flags("SF", result < 0);
                             hardware.write_flags("OF", overflow);
@@ -398,17 +573,17 @@ pub fn execute_increase_decrease_instruction(binary_data: &[u8], hardware: &mut 
                     write_to_address(&r_m, &result, hardware);
                 } else {
                     let result = match read_from_address(w == 0b1, &r_m, hardware)
-                        .unwrap_or(panic!("cannot retrieve data"))
+                        .expect("Unable to retrieve data")
                     {
                         Immediate::UnsignedWord(imme) => {
-                            let (result, overflow) = i16::from(imme).overflowing_sub(1i16);
+                            let (result, overflow) = (imme as i16).overflowing_sub(1i16);
                             hardware.write_flags("ZF", result == 0);
                             hardware.write_flags("SF", result < 0);
                             hardware.write_flags("OF", overflow);
                             Immediate::UnsignedWord(result as u16)
                         }
                         Immediate::UnsignedByte(imme) => {
-                            let (result, overflow) = i8::from(imme).overflowing_sub(1i8);
+                            let (result, overflow) = (imme as i8).overflowing_sub(1i8);
                             hardware.write_flags("ZF", result == 0);
                             hardware.write_flags("SF", result < 0);
                             hardware.write_flags("OF", overflow);
@@ -427,9 +602,9 @@ pub fn execute_increase_decrease_instruction(binary_data: &[u8], hardware: &mut 
             if let (_, Some(reg), None) = Addressing::decode(0b1, binary_data, 0b00000111) {
                 if (binary_data[0] & 0b11111000) == 0b01000000 {
                     let imme = match read_from_address(true, &reg, hardware)
-                        .unwrap_or(panic!("cannot retrieve data"))
+                        .expect("Unable to retrieve data")
                     {
-                        Immediate::UnsignedWord(imme) => i16::from(imme),
+                        Immediate::UnsignedWord(imme) => imme as i16,
                         _ => unreachable!(),
                     };
                     let (result, overflow) = imme.overflowing_add(1i16);
@@ -439,9 +614,9 @@ pub fn execute_increase_decrease_instruction(binary_data: &[u8], hardware: &mut 
                     hardware.write_flags("OF", overflow);
                 } else {
                     let imme = match read_from_address(true, &reg, hardware)
-                        .unwrap_or(panic!("cannot retrieve data"))
+                        .expect("Unable to retrieve data")
                     {
-                        Immediate::UnsignedWord(imme) => i16::from(imme),
+                        Immediate::UnsignedWord(imme) => imme as i16,
                         _ => unreachable!(),
                     };
                     let (result, overflow) = imme.overflowing_sub(1i16);
@@ -460,53 +635,47 @@ pub fn execute_increase_decrease_instruction(binary_data: &[u8], hardware: &mut 
 
 pub fn execute_negation_instruction(binary_data: &[u8], hardware: &mut Hardware) {
     let w = binary_data[0] & 0b00000001;
-    if let (_, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
-        let result = match read_from_address(w == 0b1, &r_m, hardware)
-            .unwrap_or(panic!("cannot retrieve data"))
-        {
-            Immediate::UnsignedWord(imme) => {
-                let (result, overflow) = i16::from(imme).overflowing_neg();
-                hardware.write_flags("ZF", result == 0);
-                hardware.write_flags("SF", result < 0);
-                hardware.write_flags("OF", overflow);
-                hardware.write_flags("CF", imme != 0);
-                Immediate::UnsignedWord(result as u16)
-            }
-            Immediate::UnsignedByte(imme) => {
-                let (result, overflow) = i8::from(imme).overflowing_neg();
-                hardware.write_flags("ZF", result == 0);
-                hardware.write_flags("SF", result < 0);
-                hardware.write_flags("OF", overflow);
-                hardware.write_flags("CF", imme != 0);
-                Immediate::UnsignedByte(result as u8)
-            }
-            _ => unreachable!(),
-        };
-        write_to_address(&r_m, &result, hardware);
-    } else {
-        panic!("Instruction decode error")
-    }
+    let (_, _, r_m) = Addressing::decode(w, &binary_data[1..], 0b11000111);
+    let r_m = r_m.expect("Instruction decode error");
+    match read_from_address(w == 0b1, &r_m, hardware).expect("Unable retrieve data") {
+        Immediate::UnsignedWord(imme) => {
+            let (result, overflow) = (imme as i16).overflowing_neg();
+            hardware.write_flags("ZF", result == 0);
+            hardware.write_flags("SF", result < 0);
+            hardware.write_flags("OF", overflow);
+            hardware.write_flags("CF", imme != 0);
+            write_to_address(&r_m, &Immediate::UnsignedWord(result as u16), hardware);
+        }
+        Immediate::UnsignedByte(imme) => {
+            let (result, overflow) = (imme as i8).overflowing_neg();
+            hardware.write_flags("ZF", result == 0);
+            hardware.write_flags("SF", result < 0);
+            hardware.write_flags("OF", overflow);
+            hardware.write_flags("CF", imme != 0);
+            write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware);
+        }
+        _ => panic!("Instruction decode error"),
+    };
 }
 
 pub fn execute_multiply_divide_instruction(binary_data: &[u8], hardware: &mut Hardware) {
     let w = binary_data[0] & 0b00000001;
     if binary_data[0] == 0b11110110 | 0b11110111 {
         if let (_, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
-            let source = read_from_address(w == 0b1, &r_m, hardware)
-                .unwrap_or(panic!("Unable retrieve data"));
+            let source = read_from_address(w == 0b1, &r_m, hardware).expect("Unable retrieve data");
             match binary_data[1] & 0b00111000 {
                 0b00100000 => {
                     let operand = read_from_address(
                         w == 0b1,
-                        Addressing::RegisterAddressing(
+                        &Addressing::RegisterAddressing(
                             Register::decode(w == 0b1, true, 0b000).unwrap(),
                         ),
                         hardware,
                     )
-                    .unwrap_or(panic!("Unable retrieve data"));
+                    .expect("Unable to retrieve data");
                     match (operand, source) {
                         (Immediate::UnsignedByte(operand), Immediate::UnsignedByte(source)) => {
-                            let (result, _) = i16::from(operand).overflowing_mul(i16::from(source));
+                            let (result, _) = i16::from(operand).overflowing_mul(source as i16);
                             hardware.ax = result as u16;
                             let overflow = (hardware.ax >> 8) != 0;
                             hardware.write_flags("OF", overflow);
@@ -526,20 +695,20 @@ pub fn execute_multiply_divide_instruction(binary_data: &[u8], hardware: &mut Ha
                 0b00101000 => todo!("IMUL"),
                 0b00110000 => match source {
                     Immediate::UnsignedByte(source) => {
-                        let source = i16::from(source);
-                        let operand = i16::from(hardware.ax);
-                        let quotient = operand.checked_div(source).unwrap_or(panic!("overflow"));
-                        let remainder = operand.checked_rem(source).unwrap_or(panic!("overflow"));
-                        hardware.write_to_byte_register(AL, u8::from((quotient as u16) & 0xff));
-                        hardware.write_to_byte_register(AH, u8::from((remainder as u16) & 0xff));
+                        let source = source as i16;
+                        let operand = hardware.ax as i16;
+                        let (quotient, _) = operand.overflowing_div(source);
+                        let (remainder, _) = operand.overflowing_rem(source);
+                        hardware.write_to_byte_register(AL, ((quotient as u16) & 0xff) as u8);
+                        hardware.write_to_byte_register(AH, ((remainder as u16) & 0xff) as u8);
                     }
                     Immediate::UnsignedWord(source) => {
                         let source = i32::from(source);
                         let operand = i32::from(hardware.dx) << 16 + i32::from(hardware.ax);
-                        let quotient = operand.checked_div(source).unwrap_or(panic!("overflow"));
-                        let remainder = operand.checked_rem(source).unwrap_or(panic!("overflow"));
-                        hardware.write_to_word_register(AX, u16::from((quotient as u32) & 0xffff));
-                        hardware.write_to_word_register(DX, u16::from((remainder as u32) & 0xffff));
+                        let (quotient, _) = operand.overflowing_div(source);
+                        let (remainder, _) = operand.overflowing_rem(source);
+                        hardware.write_to_word_register(AX, ((quotient as u32) & 0xffff) as u16);
+                        hardware.write_to_word_register(DX, ((remainder as u32) & 0xffff) as u16);
                     }
                     _ => unreachable!(),
                 },
@@ -556,28 +725,22 @@ pub fn execute_multiply_divide_instruction(binary_data: &[u8], hardware: &mut Ha
 
 pub fn execute_not_instruction(binary_data: &[u8], hardware: &mut Hardware) {
     let w = binary_data[0] & 0b00000001;
-    if binary_data[0] == 0b11110110 | 0b11110111 {
-        if let (_, None, Some(r_m)) = Addressing::decode(w == 0b1, &binary_data[1..], 0b11000111) {
-            if (binary_data[1] & 0b00111000) == 0b00011000 {
-                match read_from_address(w == 0b1, &r_m, hardware)
-                    .unwrap_or(panic!("Unable retrieve data"))
-                {
-                    Immediate::UnsignedByte(imme) => {
-                        write_to_address(&r_m, &Immediate::UnsignedByte(!imme), hardware)
-                    }
-                    Immediate::UnsignedWord(imme) => {
-                        write_to_address(&r_m, &Immediate::UnsignedWord(!imme), hardware)
-                    }
-                    _ => unreachable!(),
-                }
-            } else {
-                panic!("Instruction decode error")
-            }
-        } else {
-            panic!("Instruction decode error")
-        }
-    } else {
+    if binary_data[0] != 0b11110110 | 0b11110111 {
         panic!("Instruction decode error")
+    }
+    match Addressing::decode(w, &binary_data[1..], 0b11000111) {
+        (_, None, Some(r_m)) if match_reg(binary_data[1], &[0b011]) => {
+            match read_from_address(w == 0b1, &r_m, hardware).expect("Unable retrieve data") {
+                Immediate::UnsignedByte(imme) => {
+                    write_to_address(&r_m, &Immediate::UnsignedByte(!imme), hardware)
+                }
+                Immediate::UnsignedWord(imme) => {
+                    write_to_address(&r_m, &Immediate::UnsignedWord(!imme), hardware)
+                }
+                _ => unreachable!(),
+            }
+        }
+        _ => panic!("Instruction decode error"),
     }
 }
 
@@ -585,10 +748,9 @@ pub fn execute_shift_instruction(binary_data: &[u8], hardware: &mut Hardware) {
     let v = (binary_data[0] & 0b00000010) >> 1;
     let w = binary_data[0] & 0b00000001;
     if let (_, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
-        let source = read_from_address(w == 0b1, &r_m, hardware)
-            .expect("Unable to retrieve data");
+        let source = read_from_address(w == 0b1, &r_m, hardware).expect("Unable to retrieve data");
         let offset = if v == 0b1 {
-            hardware.read_from_byte_register(CL) & 0x1f
+            hardware.clone().read_from_byte_register(CL) & 0x1f
         } else {
             1u8
         };
@@ -599,7 +761,7 @@ pub fn execute_shift_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                     let carry = (result & 0x80) >> 7;
                     let (result, _) = source.overflowing_shl(1);
                     hardware.write_flags("ZF", result == 0);
-                    hardware.write_flags("SF", i8::from(result) < 0);
+                    hardware.write_flags("SF", (result as i8) < 0);
                     hardware.write_flags("OF", ((result & 0x80) >> 7) != carry);
                     hardware.write_flags("CF", result == 0b1);
                     write_to_address(&r_m, &Immediate::UnsignedByte(result), hardware);
@@ -609,7 +771,7 @@ pub fn execute_shift_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                     let carry = (result & 0x8000) >> 15;
                     let (result, _) = source.overflowing_shl(1);
                     hardware.write_flags("ZF", result == 0);
-                    hardware.write_flags("SF", i16::from(result) < 0);
+                    hardware.write_flags("SF", (result as i16) < 0);
                     hardware.write_flags("OF", ((result & 0x8000) >> 15) != carry);
                     hardware.write_flags("CF", result == 0b1);
                     write_to_address(&r_m, &Immediate::UnsignedWord(result), hardware);
@@ -622,11 +784,11 @@ pub fn execute_shift_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                     let carry = result & 0x01;
                     let (result, _) = source.overflowing_shr(1);
                     hardware.write_flags("ZF", result == 0);
-                    hardware.write_flags("SF", i8::from(result) < 0);
+                    hardware.write_flags("SF", (result as i8) < 0);
                     if v == 0b0 {
                         hardware.write_flags("OF", ((result & 0x80) >> 7) == 0b1);
                     }
-                    hardware.write_flags("CF", result == 0b1);
+                    hardware.write_flags("CF", carry == 0b1);
                     write_to_address(&r_m, &Immediate::UnsignedByte(result), hardware);
                 }
                 Immediate::UnsignedWord(source) => {
@@ -634,40 +796,40 @@ pub fn execute_shift_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                     let carry = result & 0x0001;
                     let (result, _) = source.overflowing_shr(1);
                     hardware.write_flags("ZF", result == 0);
-                    hardware.write_flags("SF", i16::from(result) < 0);
+                    hardware.write_flags("SF", (result as i16) < 0);
                     if v == 0b0 {
                         hardware.write_flags("OF", ((result & 0x8000) >> 15) == 0b1);
                     }
-                    hardware.write_flags("CF", result == 0b1);
+                    hardware.write_flags("CF", carry == 0b1);
                     write_to_address(&r_m, &Immediate::UnsignedWord(result), hardware);
                 }
                 _ => unreachable!(),
             },
             0b00111000 => match source {
                 Immediate::UnsignedByte(source) => {
-                    let source = i8::from(source);
+                    let source = source as i8;
                     let (result, _) = source.overflowing_shr((offset - 1) as u32);
                     let carry = (result as u8) & 0x01;
                     let (result, _) = source.overflowing_shr(1);
                     hardware.write_flags("ZF", result == 0);
-                    hardware.write_flags("SF", i8::from(result) < 0);
+                    hardware.write_flags("SF", (result as i8) < 0);
                     if v == 0b0 {
                         hardware.write_flags("OF", false);
                     }
-                    hardware.write_flags("CF", result == 0b1);
+                    hardware.write_flags("CF", carry == 0b1);
                     write_to_address(&r_m, &Immediate::UnsignedByte(result as u8), hardware);
                 }
                 Immediate::UnsignedWord(source) => {
-                    let source = i16::from(source);
+                    let source = source as i16;
                     let (result, _) = source.overflowing_shr((offset - 1) as u32);
                     let carry = (result as u16) & 0x0001;
                     let (result, _) = source.overflowing_shr(1);
                     hardware.write_flags("ZF", result == 0);
-                    hardware.write_flags("SF", i16::from(result) < 0);
+                    hardware.write_flags("SF", (result as i16) < 0);
                     if v == 0b0 {
                         hardware.write_flags("OF", false);
                     }
-                    hardware.write_flags("CF", result == 0b1);
+                    hardware.write_flags("CF", carry == 0b1);
                     write_to_address(&r_m, &Immediate::UnsignedWord(result as u16), hardware);
                 }
                 _ => unreachable!(),
@@ -678,8 +840,8 @@ pub fn execute_shift_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                 Immediate::UnsignedByte(source) => {
                     let (result, _) = source.overflowing_shl((offset - 1) as u32);
                     let carry = (result & 0x80) >> 7;
-                    let (result, _) = source.overflowing_shl(1);
-                    result = if hardware.read_flags("CF") {
+                    let (mut result, _) = source.overflowing_shl(1);
+                    result = if hardware.clone().read_flags("CF") {
                         result | 0x01
                     } else {
                         result & 0xfe
@@ -693,8 +855,8 @@ pub fn execute_shift_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                 Immediate::UnsignedWord(source) => {
                     let (result, _) = source.overflowing_shl((offset - 1) as u32);
                     let carry = (result & 0x8000) >> 15;
-                    let (result, _) = source.overflowing_shl(1);
-                    result = if hardware.read_flags("CF") {
+                    let (mut result, _) = source.overflowing_shl(1);
+                    result = if hardware.clone().read_flags("CF") {
                         result | 0x0001
                     } else {
                         result & 0xfffe
@@ -708,7 +870,7 @@ pub fn execute_shift_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                 _ => unreachable!(),
             },
             0b00011000 => todo!("RCR"),
-            _ => return panic!("Instruction decode error"),
+            _ => panic!("Instruction decode error"),
         };
     } else {
         panic!("Instruction decode error")
@@ -723,10 +885,10 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
             let d = (binary_data[0] & 0b00000010) >> 1;
             if let (_, Some(reg), Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11111111)
             {
-                let value_1 = read_from_address(w == 0b1, &reg, hardware)
-                    .expect("Unable to retrieve data");
-                let value_2 = read_from_address(w == 0b1, &r_m, hardware)
-                    .expect("Unable to retrieve data");
+                let value_1 =
+                    read_from_address(w == 0b1, &reg, hardware).expect("Unable to retrieve data");
+                let value_2 =
+                    read_from_address(w == 0b1, &r_m, hardware).expect("Unable to retrieve data");
                 match (value_1, value_2) {
                     (Immediate::UnsignedByte(value_1), Immediate::UnsignedByte(value_2)) => {
                         let result = match binary_data[0] & 0b11111100 {
@@ -744,7 +906,7 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                             }
                         };
                         hardware.write_flags("ZF", result == 0);
-                        hardware.write_flags("SF", i8::from(result) < 0);
+                        hardware.write_flags("SF", (result as i8) < 0);
                     }
                     (Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
                         let result = match binary_data[0] & 0b11111100 {
@@ -762,7 +924,7 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                             }
                         };
                         hardware.write_flags("ZF", result == 0);
-                        hardware.write_flags("SF", i16::from(result) < 0);
+                        hardware.write_flags("SF", (result as i16) < 0);
                     }
                     _ => unreachable!(),
                 };
@@ -774,7 +936,7 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
         0b00100100 | 0b00100101 | 0b00001100 | 0b00001101 | 0b00110100 | 0b00110101 => {
             let value_1 = read_from_address(
                 w == 0b1,
-                Addressing::RegisterAddressing(Register::decode(w == 0b1, true, 0b000).unwrap()),
+                &Addressing::RegisterAddressing(Register::decode(w == 0b1, true, 0b000).unwrap()),
                 hardware,
             )
             .expect("Unable to retrieve data");
@@ -790,7 +952,7 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                     };
                     hardware.write_to_byte_register(AL, result);
                     hardware.write_flags("ZF", result == 0);
-                    hardware.write_flags("SF", i8::from(result) < 0);
+                    hardware.write_flags("SF", (result as i8) < 0);
                 }
                 (Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
                     let result = match binary_data[0] & 0b11111110 {
@@ -801,7 +963,7 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                     };
                     hardware.write_to_word_register(AX, result);
                     hardware.write_flags("ZF", result == 0);
-                    hardware.write_flags("SF", i16::from(result) < 0);
+                    hardware.write_flags("SF", (result as i16) < 0);
                 }
                 _ => unreachable!(),
             };
@@ -809,8 +971,8 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
         // Immediate to Register/Memory
         0b10000000..=0b10000011 => {
             if let (rl, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
-                let value_1 = read_from_address(w == 0b1, &r_m, hardware)
-                    .expect("Unable to retrieve data");
+                let value_1 =
+                    read_from_address(w == 0b1, &r_m, hardware).expect("Unable to retrieve data");
                 let (_, value_2) = decode_data(w == 0b1, false, &binary_data[(2 + rl)..]);
                 let value_2 = value_2.expect("Unable to retrieve data");
                 match (value_1, value_2) {
@@ -823,7 +985,7 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                         };
                         write_to_address(&r_m, &Immediate::UnsignedByte(result), hardware);
                         hardware.write_flags("ZF", result == 0);
-                        hardware.write_flags("SF", i8::from(result) < 0);
+                        hardware.write_flags("SF", (result as i8) < 0);
                     }
                     (Immediate::UnsignedWord(value_1), Immediate::UnsignedWord(value_2)) => {
                         let result = match binary_data[1] & 0b00111000 {
@@ -834,7 +996,7 @@ pub fn execute_logic_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                         };
                         write_to_address(&r_m, &Immediate::UnsignedWord(result), hardware);
                         hardware.write_flags("ZF", result == 0);
-                        hardware.write_flags("SF", i16::from(result) < 0);
+                        hardware.write_flags("SF", (result as i16) < 0);
                     }
                     _ => unreachable!(),
                 };
@@ -855,10 +1017,10 @@ pub fn execute_test_instruction(binary_data: &[u8], hardware: &mut Hardware) {
         0b10000100 | 0b10000101 => {
             if let (_, Some(reg), Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11111111)
             {
-                let value_1 = read_from_address(w == 0b1, &reg, hardware)
-                    .expect("Unable to retrieve data");
-                let value_2 = read_from_address(w == 0b1, &r_m, hardware)
-                    .expect("Unable to retrieve data");
+                let value_1 =
+                    read_from_address(w == 0b1, &reg, hardware).expect("Unable to retrieve data");
+                let value_2 =
+                    read_from_address(w == 0b1, &r_m, hardware).expect("Unable to retrieve data");
                 (value_1, value_2)
             } else {
                 panic!("Instruction decode error")
@@ -867,13 +1029,10 @@ pub fn execute_test_instruction(binary_data: &[u8], hardware: &mut Hardware) {
         // Immediate Data and Register/Memory
         0b11110110 | 0b11110111 if (binary_data[1] & 0b00111000) == 0b0 => {
             if let (rl, None, Some(r_m)) = Addressing::decode(w, &binary_data[1..], 0b11000111) {
-                let value_1 = read_from_address(w == 0b1, &r_m, hardware)
-                    .expect("Unable to retrieve data");
+                let value_1 =
+                    read_from_address(w == 0b1, &r_m, hardware).expect("Unable to retrieve data");
                 let (_, value_2) = decode_data(w == 0b1, false, &binary_data[(2 + rl)..]);
-                (
-                    value_1,
-                    value_2.expect("Unable to retrieve data"),
-                )
+                (value_1, value_2.expect("Unable to retrieve data"))
             } else {
                 panic!("Instruction decode error")
             }
@@ -887,10 +1046,7 @@ pub fn execute_test_instruction(binary_data: &[u8], hardware: &mut Hardware) {
             )
             .expect("Unable to retrieve data");
             let (_, value_2) = decode_data(w == 0b1, false, &binary_data[1..]);
-            (
-                value_1,
-                value_2.expect("Unable to retrieve data"),
-            );
+            (value_1, value_2.expect("Unable to retrieve data"))
         }
         _ => panic!("Instruction decode error"),
     };
@@ -925,9 +1081,13 @@ pub fn execute_string_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                         .read_byte_from_memory(source_address)
                         .expect("Unable to retrieve data"),
                 );
-                let offset = if hardware.read_flags("DF") { -0b1 } else { 0b1 };
-                hardware.si += offset;
-                hardware.di += offset;
+                if hardware.clone().read_flags("DF") {
+                    hardware.si -= 1;
+                    hardware.di -= 1;
+                } else {
+                    hardware.si += 1;
+                    hardware.di += 1;
+                }
             } else {
                 hardware.write_word_to_memory(
                     target_address,
@@ -936,13 +1096,13 @@ pub fn execute_string_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                         .read_word_from_memory(source_address)
                         .expect("Unable to retrieve data"),
                 );
-                let offset = if hardware.read_flags("DF") {
-                    -0b10
+                if hardware.clone().read_flags("DF") {
+                    hardware.si -= 2;
+                    hardware.di -= 2;
                 } else {
-                    0b10
-                };
-                hardware.si += offset;
-                hardware.di += offset;
+                    hardware.si += 2;
+                    hardware.di += 2;
+                }
             }
         }
         0b10100110 | 0b10100111 => todo!("CMPS"),
@@ -967,7 +1127,7 @@ pub fn execute_repeat_instruction(binary_data: &[u8], hardware: &mut Hardware) {
                 hardware.cx -= 1;
             }
         }
-        _ => return panic!("Instruction decode error"),
+        _ => panic!("Instruction decode error"),
     };
 }
 
@@ -976,18 +1136,18 @@ pub fn execute_jump_instruction(binary_data: &[u8], hardware: &mut Hardware) {
         // CALL / JMP (Direct within Segment)
         0b11101000 | 0b11101001 => {
             if binary_data.len() < 3 {
-                return panic!("Instruction decode error");
+                panic!("Instruction decode error");
             }
             let immediate = u16::from_le_bytes((&binary_data[1..3]).try_into().unwrap());
             hardware.ip = match binary_data[2] & 0x80 {
                 0x0 => hardware.ip + 0x3 + immediate,
-                _ => (hardware.ip + 3i16 - ((immediate as i16) * -1i16)) as u16,
+                _ => ((hardware.ip as i16) + 3i16 - ((immediate as i16) * -1i16)) as u16,
             };
         }
         // JMP (Direct within Segment-Short)
         0b11101011 => {
             if binary_data.len() < 2 {
-                return panic!("Instruction decode error");
+                panic!("Instruction decode error");
             }
             hardware.ip = match binary_data[1] & 0x80 {
                 0x0 => hardware.ip + 0x2 + (binary_data[1] as u16),
@@ -996,10 +1156,8 @@ pub fn execute_jump_instruction(binary_data: &[u8], hardware: &mut Hardware) {
         }
         // CALL / JMP (Indirect within Segment / Indirect Intersegment)
         0b11111111 if match_reg(binary_data[1], &[0b010, 0b011, 0b100, 0b101]) => {
-            if let (l, None, Some(r_m)) = Addressing::decode(0b1, &binary_data[1..], 0b11000111) {
-                match read_from_address(true, &r_m, hardware)
-                    .expect("Unable to retrieve data")
-                {
+            if let (_, None, Some(r_m)) = Addressing::decode(0b1, &binary_data[1..], 0b11000111) {
+                match read_from_address(true, &r_m, hardware).expect("Unable to retrieve data") {
                     Immediate::UnsignedWord(address) => hardware.ip = address,
                     _ => unreachable!(),
                 };
@@ -1012,7 +1170,10 @@ pub fn execute_jump_instruction(binary_data: &[u8], hardware: &mut Hardware) {
             if let (_, Some(offset)) = decode_data(true, false, &binary_data[1..]) {
                 if let (_, Some(segment)) = decode_data(true, false, &binary_data[3..]) {
                     hardware.ip = calculate_effective_address(
-                        &Addressing::DirectIndexAddressing(offset, segment),
+                        &Addressing::DirectIndexAddressing(
+                            Numerical::Imme(offset),
+                            Numerical::Imme(segment),
+                        ),
                         hardware,
                     )
                     .expect("Unable to retrieve data");
@@ -1031,18 +1192,14 @@ pub fn execute_return_instruction(binary_data: &[u8], hardware: &mut Hardware) {
     match binary_data[0] {
         // Within Segment
         0b11000011 => {
-            hardware.ip = hardware
-                .pop_from_stack()
-                .expect("Unable to retrieve data");
+            hardware.ip = hardware.pop_from_stack().expect("Unable to retrieve data");
         }
         // Within Seg Adding Immed to SP
         0b11000010 => {
-            let ip = hardware
-                .pop_from_stack()
-                .expect("Unable to retrieve data");
+            let ip = hardware.pop_from_stack().expect("Unable to retrieve data");
             let (_, disp) = decode_data(true, false, &binary_data[1..]);
             hardware.ip = match disp.expect("Unable to retrieve data") {
-                Immediate::UnsignedWord(disp) => ((ip as i16) + i16::from(disp)) as u16,
+                Immediate::UnsignedWord(disp) => ((ip as i16) + (disp as i16)) as u16,
                 _ => unreachable!(),
             };
         }
@@ -1083,7 +1240,7 @@ pub fn execute_conditional_jump_instruction(binary_data: &[u8], hardware: &mut H
         0b11100001 => todo!("LOOPZ"),
         0b11100000 => todo!("LOOPNZ"),
         0b11100011 => todo!("JCXZ"),
-        _ => return panic!("Instruction decode error"),
+        _ => panic!("Instruction decode error"),
     };
     let displacement = match binary_data[1] & 0x80 {
         0b0 => (hardware.ip as i16) + 2i16 + (binary_data[1] as i16),

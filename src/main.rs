@@ -1,3 +1,4 @@
+#![feature(bigint_helper_methods)]
 extern crate core;
 
 mod cli;

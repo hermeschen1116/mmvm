@@ -6,7 +6,6 @@ use crate::disassembler::register::SegmentRegister::DS;
 use crate::disassembler::register::WordRegister::{BP, BX, DI, SI};
 use crate::disassembler::register::{BaseRegister, IndexRegister, Register};
 use crate::interpreter::hardware::Hardware;
-use crate::utils::header::Header;
 
 pub fn calculate_effective_address(r_m: &Addressing, hardware: &Hardware) -> Option<u16> {
     match r_m {
@@ -65,6 +64,7 @@ pub fn calculate_effective_address(r_m: &Addressing, hardware: &Hardware) -> Opt
                 }) as u16;
             Some(address)
         }
+        _ => unreachable!(),
     }
 }
 
@@ -88,13 +88,18 @@ pub fn read_from_address(
         _ => {
             if let Some(address) = calculate_effective_address(&address, hardware) {
                 match word_mode {
-                    true if let Some(imme) = hardware.clone().read_word_from_memory(address) => {
-                        Some(Immediate::UnsignedWord(imme))
-                    }
-                    false if let Some(imme) = hardware.clone().read_byte_from_memory(address) => {
-                        Some(Immediate::UnsignedByte(imme))
-                    }
-                    _ => None,
+                    true => Some(Immediate::UnsignedWord(
+                        hardware
+                            .clone()
+                            .read_word_from_memory(address)
+                            .expect("Unable to retrieve data"),
+                    )),
+                    false => Some(Immediate::UnsignedByte(
+                        hardware
+                            .clone()
+                            .read_byte_from_memory(address)
+                            .expect("Unable to retrieve data"),
+                    )),
                 }
             } else {
                 None
